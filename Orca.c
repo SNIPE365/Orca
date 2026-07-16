@@ -210,10 +210,7 @@ int main() {
     }
     
     g_WndMenu = menu_CreateMainMenu();
-    
-    //windows will ignore first ShowWindow desires... so make a dummy one.
-    ShowWindow( GetDesktopWindow() , SW_SHOW );
-
+        
     // Create the window and show it  
     _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
     _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE) & ~WS_THICKFRAME ; //';
@@ -235,7 +232,7 @@ int main() {
     // Process windows messages
     // *** all messages(events) will be read converted/dispatched here ***
     UpdateWindow( hwnd );
-    ShowWindow( hwnd , SW_SHOW );
+    ShowWindow( hwnd , SW_SHOWMAXIMIZED );
         
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {
