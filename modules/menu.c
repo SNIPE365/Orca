@@ -1,6 +1,7 @@
 #define STRINGIFY(x) #x
 #define TOSTRING(x) STRINGIFY(x)
-#define _err( _msg... ) static_assert( 0 , _msg )
+
+#include "..\modules\menuActions.c"
 
 #ifndef main_module  
   _err( "Compile from " TOSTRING(main_module) ".c" )
@@ -8,7 +9,7 @@
 
 #define ForEachMenuEntry( __Entry , __SubMenu , __EndSubMenu , __Separator ) \
    __SubMenu( "&File" ) \
-     __Entry( meFile_New      , "&New"              , _Ctrl        , VK_N , &File_New    ) \
+     /*__Entry( meFile_New      , "&New"              , _Ctrl        , VK_N , &File_New    ) \
      __Entry( meFile_open     , "&Open"             , _Ctrl        , VK_O , &File_Open   ) \
      __Entry( meFile_Save     , "&Save"             , _Ctrl        , VK_S , &File_Save   ) \
      __Entry( meFile_SaveAs   , "Save &As"          , _Ctrl+_Shift , VK_S , &File_SaveAs ) \
@@ -16,10 +17,10 @@
      __Separator() \
       __Entry( meFile_Import  , "&Import"           , _Ctrl        , VK_I , &File_Import ) \
       __Entry( meFile_Export  , "&Export"           , _Ctrl+_Shift , VK_I , &File_Export ) \
-     __Separator() \
+     __Separator() */\
      __Entry( meFile_Exit     , "&Quit" "\tAlt+F4"  , _Ctrl        , VK_Q , &File_Exit   ) \
    __EndSubMenu() \
-   __SubMenu( "&Edit" ) \
+   /*__SubMenu( "&Edit" ) \
       __Entry( meEdit_Undo    , "&Undo"  "\tCtrl+Z"  ,              ,      , &Edit_Undo ) \
       __Entry( meEdit_Redo    , "&Redo"              , _Ctrl+_Shift , VK_Z , &Edit_Redo ) \
       __Separator() \
@@ -34,7 +35,7 @@
       __Separator() \
       __Entry( meCode_Build   , "&Build"             , 0            , VK_F6 , &Button_Compile ) \
       __Entry( meCode_Clear   , "Cl&ear output"      , _Ctrl+_Shift , VK_B , &Code_ClearOutput ) \
-   __EndSubMenu()
+   __EndSubMenu()*/
 //-------------------------------------------------------------------------------------------
    
 #define _Shift FSHIFT
@@ -54,8 +55,6 @@ typedef enum {
 #undef EnumEntry
 #undef MayEnumEntry
 #undef MayEnumSubMenu
-
-#define _CTL(_n) g_CTL[_n]
 
 static void* menu_AddSubMenu( void* hMenu , char* pzText , int iID /* = 0 */ ) {        
     if (!IsMenu(hMenu)) { return NULL; }
@@ -152,7 +151,7 @@ static HMENU menu_CreateMainMenu(void) {
     #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) \
         { \
             _const _sText2 = _Text ; \
-            menu_MenuAddEntry( hMenu , _idName , _sText2 , 0,0 ); /*_Callback*/ \
+            menu_MenuAddEntry( hMenu , _idName , _sText2 , _Callback+0 , 0 ); \
         }
         
     _auto hMenu = CreateMenu() ; g_WndMenu = hMenu;      
@@ -161,5 +160,3 @@ static HMENU menu_CreateMainMenu(void) {
 
     return hMenu;
 } //menu_CreateMainMenu()
-
-#undef _CTL

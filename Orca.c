@@ -5,83 +5,85 @@
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
+#include <uxtheme.h>
 
-#define STRINGIFY(x) #x
-#define TOSTRING(x) STRINGIFY(x)
+static void defines () { //defines
+    #define STRINGIFY(x) #x
+    #define TOSTRING(x) STRINGIFY(x)
+    #define _err( _msg... ) static_assert( 0 , _msg )
 
+    #define _auto __auto_type
+    #define _const const __auto_type
+    #define _with(_var) { _const w = &_var;
+    #define _endwith }
 
-//*************** Enumerating our control id's ***********
-typedef enum {
-    wcMain,
-    wcButton,
-    wcEdit,
-    wcLast
-} WindowControls;
+    #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)    
+        #define _constexpr( _parms... ) constexpr __auto_type _parms
+    #else
+        #define _constexpr( _parms... ) enum { _parms }
+    #endif
+    //_constexpr( test = 100 ); _constexpr( test2 = 110 );
+}
 
-HWND g_CTL[wcLast];       //controls
 HINSTANCE g_APPINSTANCE;  //instance
 HFONT g_MainFont;         //fonts
 HMENU g_WndMenu;          //menu
 //AppName
-char* g_pzAppName = "GUI Example";        
+char* g_pzAppName = "Orca IDE";      
 
-#define _auto __auto_type
-#define _const const __auto_type
-#define _with(_var) { _const w = &_var;
-#define _endwith }
+UINT g_CurItemID=0 , g_CurItemState=0; 
+HMENU g_hCurMenu=NULL;
 
-#if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)    
-    #define _constexpr( _parms... ) constexpr __auto_type _parms
-#else
-    #define _constexpr( _parms... ) enum { _parms }
-#endif
-//_constexpr( test = 100 ); _constexpr( test2 = 110 );
+#define _CTL(_ctlId) g_CTL[_ctlId]
+#define _Wnd MAIN
 
+#include "modules\wndCreate.c"
 #include "modules\menu.c"
 
+DWORD g_dwEnableSizeBorder = 0;
+static void UpdateSizeBorder( HWND hwnd , DWORD dwStyle ) {
+    RECT rc ; GetWindowRect( hwnd , &rc );
+    int iFrameSz = GetSystemMetrics( SM_CXFRAME )-3;                            
+    if ((dwStyle & WS_THICKFRAME)) { iFrameSz = -iFrameSz; }
+    rc.left  += iFrameSz; rc.top    += iFrameSz;
+    rc.right -= iFrameSz; rc.bottom -= iFrameSz;
+    SetWindowLong( hwnd , GWL_STYLE , dwStyle );
+    _const cSwp = SWP_NOZORDER|SWP_NOACTIVATE|SWP_FRAMECHANGED;
+    //SetWindowPos( hwnd , NULL , rc.left,rc.top , rc.right-rc.left,rc.bottom-rc.top , cSwp );
+                                
+    HDWP pDefer = BeginDeferWindowPos( 1 );
+    DeferWindowPos( pDefer , hwnd , NULL , rc.left,rc.top , rc.right-rc.left,rc.bottom-rc.top , cSwp );
+    EndDeferWindowPos( pDefer );
+}    
+
 // *************** Procedure Function ****************
-CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lparam ) {  
-    #define _CTL(_ctlId) g_CTL[_ctlId]
-    
+static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lparam ) {  
     switch ( message ) {
-        case WM_CREATE:  { //Window was created    
-            if (_CTL(wcMain)) { return 0; }
-            _CTL(wcMain) = hwnd;
-        
-            //just a macro to help creating controls
-            #define _AddCtl( mID , mExStyle , mClass , mCaption , mStyle , mX , mY , mWid , mHei ) _CTL(mID) = CreateWindowEx(mExStyle,mClass,mCaption,mStyle,mX,mY,mWid,mHei,hwnd,(HMENU)(mID),g_APPINSTANCE,NULL);
-            
-            _const UpDn = UPDOWN_CLASS;    
-            _const cStyle = WS_CHILD | WS_VISIBLE;            //Standard style for buttons class controls :)    
-            _const cUpDnStyle = cStyle | UDS_AUTOBUDDY;       //' or UDS_SETBUDDYINT  
-            _const cButtonStyle = cStyle;
-            _const cLabelStyle = cStyle;    
-            _const cTxtStyle = cStyle | ES_AUTOVSCROLL | WS_VSCROLL | ES_MULTILINE;
-            _const RichStyle = cStyle | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | ES_MULTILINE;    
-            _const cBrd = WS_EX_CLIENTEDGE;
-        
-            // **** Creating a Control ****
-            _AddCtl( wcButton , 0    , "button" , "Click"        , cStyle      , 10 , 10 , 80 , 24   );
-            _AddCtl( wcEdit   , cBrd , "edit"   , "Hello World " , cTxtStyle  , 10 , 44 , 320 , 240 );
-        
-            // **** Creating a font ****
-            HDC hDC = GetDC(hwnd); //can be used for other stuff that requires a temporary DC
-            int nHeight = -MulDiv(12, GetDeviceCaps(hDC, LOGPIXELSY), 72); //'calculate size matching DPI
-        
-            g_MainFont = CreateFont(nHeight,0,0,0,FW_NORMAL,0,0,0,DEFAULT_CHARSET,0,0,DRAFT_QUALITY | ANTIALIASED_QUALITY,0,"Verdana");
-            // **** Setting this font for all controls ****
-            for (int CNT = wcMain ; CNT < wcLast ; CNT++ ) {
-                SendMessage( _CTL(CNT) , WM_SETFONT , (WPARAM)g_MainFont , true );
-            }
-            SendMessage( _CTL(wcEdit) , EM_SETLIMITTEXT , 0 , 0 );
-        
-            ReleaseDC(hwnd,hDC);    
-            SetFocus(hwnd);
-        
-            return 1;
+        case WM_CREATE:  { //Window was created
+            return wndCreate( hwnd );
         } // WM_CREATE
-        case WM_COMMAND: { //Event happened to a control (child window/control)    
-            switch HIWORD(wparam) {
+        case WM_COMMAND: { //Event happened to a control (child window/control)
+            _auto wNotifyCode = (int)(HIWORD(wparam));
+            _const wID = LOWORD(wparam);
+            _const hwndCtl = (HWND)lparam;
+            if (!hwndCtl && !wNotifyCode) { wNotifyCode = -1; }
+            switch (wNotifyCode) {
+                case -1:         { //Command from the menu                    
+                    if (wID != g_CurItemID) { return 0; } //not valid menu event
+                    MENUITEMINFO tItem = { sizeof(MENUITEMINFO) , MIIM_DATA | MIIM_STATE };
+                    GetMenuItemInfo( g_hCurMenu , wID , false , &tItem );
+                    g_CurItemState = tItem.fState;
+                    if (tItem.dwItemData) {                        
+                        void (*MenuItemCallback)(void) = (void (*)(void))tItem.dwItemData;
+                        MenuItemCallback();
+                    }
+                    g_hCurMenu = NULL;
+                    return g_CurItemID = 0; //break
+                }
+                case 1:          { //Accelerator
+                    //ProcessAccelerator( wID )
+                    return 0;
+                }
                 case EN_CHANGE:  {
                     printf("%i\n,",SendMessage(_CTL(wcEdit),WM_GETTEXTLENGTH,0,0));
                 } //EN_CHANGE
@@ -89,14 +91,58 @@ CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lpara
                     switch (LOWORD(wparam)) {
                         case wcButton: {
                             MessageBox( hwnd , "Bye" , "Bye" , MB_ICONINFORMATION );
-                            PostQuitMessage(0);
-                            break;        
+                            PostQuitMessage(0);                            
+                            break;
                         } //wcButton
                     } // switch (lparam)
                 } //BN_CLICKED
             } //switch HIWORD(wparam)
             return 0;
         }
+        case WM_TIMER: {
+            if (wparam != WM_NCMOUSEMOVE) { break; }
+            KillTimer( hwnd , wparam );
+            POINT pt; GetCursorPos( &pt );
+            RECT rc; GetWindowRect( hwnd , &rc );
+            if (PtInRect( &rc , pt )) { 
+                if (g_dwEnableSizeBorder) { UpdateSizeBorder( hwnd , g_dwEnableSizeBorder ) ; g_dwEnableSizeBorder = 0; }
+                break; 
+            } //may falltrough
+        }
+        case WM_MOUSEMOVE: {
+            wparam = HTCLIENT;
+            //falltrough
+        }
+        case WM_NCMOUSEMOVE: {            
+            bool bEnabled = false , bChanged = false;
+            switch ( wparam ) {
+                case HTBORDER : case HTBOTTOM : case HTBOTTOMLEFT : case HTBOTTOMRIGHT : case HTGROWBOX :
+                case HTLEFT : case HTRIGHT : case HTTOP : case HTTOPLEFT : case HTTOPRIGHT : bEnabled = true;
+            }
+            DWORD newStyle = GetWindowLong( hwnd , GWL_STYLE ) ^ WS_THICKFRAME;            
+            if ((bEnabled) && ((newStyle & WS_THICKFRAME))) { bChanged = true; }
+            if ((!bEnabled) && (!(newStyle & WS_THICKFRAME))) { bChanged = true; }
+            //printf("enabled=%i changed=%i\n",bEnabled,bChanged);
+            if (bEnabled && g_dwEnableSizeBorder) { SetTimer( hwnd , WM_NCMOUSEMOVE , 100 , NULL ); break; } //do nothing while we have a delayed update            
+            if (bChanged) { 
+              if (bEnabled) { g_dwEnableSizeBorder = newStyle; } else { g_dwEnableSizeBorder=0 ; UpdateSizeBorder( hwnd , newStyle ); }
+            }
+            if (bEnabled) { SetTimer( hwnd , WM_NCMOUSEMOVE , 200 , NULL ); }
+            break;
+        }
+        case WM_SIZE:    {
+            puts("Size changed?");
+            RECT rc ; GetClientRect( hwnd , &rc );
+            printf("%ix%i\n",rc.right,rc.bottom);
+            break;
+        }
+        case WM_MENUSELECT: { //track newest menu handle/item/state
+            _const iID = (UINT)(LOWORD(wparam)); 
+            _const fuFlags = (UINT)(HIWORD(wparam)); 
+            _const hMenu = (HMENU)lparam; 
+            if (hMenu) { g_CurItemID = iID ; g_hCurMenu = hMenu; }
+            return 0; //break;
+        } //WM_MENUSELECT
         case WM_NOTIFY:  { //some events goes trough notify instead of command (child window/control)
             break;
         } // WM_NOTIFY
@@ -117,16 +163,16 @@ CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lpara
     } // switch ( message )
   
     // *** if program reach here default predefined action will happen ***
-    return DefWindowProc( hwnd, message, wparam, lparam );
+    return DefWindowProc( hwnd, message, wparam, lparam );    
     
-    #undef _CTL    
 } //WndProc()
+
+#undef _CTL
 
 /* *********************************************************************
    *********************** SETUP MAIN WINDOW ***************************
    ******************* This code can be ignored ************************
    ********************************************************************* */
-
 int main() {
 
     InitCommonControls();
@@ -157,18 +203,33 @@ int main() {
     }
     
     g_WndMenu = menu_CreateMainMenu();
+    
+    //windows will ignore first ShowWindow desires... so make a dummy one.
+    //ShowWindow( GetDesktopWindow() , SW_SHOW );
 
     // Create the window and show it  
-    _const cStyleEx = 0; //WS_EX_COMPOSITED or WS_EX_LAYERED
-    _const cStyle   = WS_VISIBLE | WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE;
-    RECT tWndRc = {0,0,640,480};
+    _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
+    _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE) & ~WS_THICKFRAME ; //';
+    RECT tWndRc = {0,0,640,480}, tWorkRc;
     AdjustWindowRectEx( &tWndRc , cStyle , TRUE , cStyleEx );
-    hwnd = CreateWindowEx(cStyleEx,g_pzAppName,g_pzAppName,cStyle,
-        200,200,tWndRc.right-tWndRc.left,tWndRc.bottom-tWndRc.top,NULL,g_WndMenu,g_APPINSTANCE,0);
+    
+    //center it in the workarea
+    _const iWid = tWndRc.right-tWndRc.left;
+    _const iHei = tWndRc.bottom-tWndRc.top;
+    SystemParametersInfo( SPI_GETWORKAREA , 0 , &tWorkRc , false );
+    tWndRc.left = tWorkRc.left + (((tWorkRc.right-tWorkRc.left)-iWid)/2);
+    tWndRc.top  = tWorkRc.top  + (((tWorkRc.bottom-tWorkRc.top)-iHei)/2);
+    tWndRc.right = tWndRc.left + iWid ; tWndRc.bottom = tWndRc.top + iHei;    
+    
+    hwnd = CreateWindowEx(cStyleEx,g_pzAppName,g_pzAppName,cStyle,tWndRc.left,tWndRc.top,iWid,iHei,NULL,g_WndMenu,g_APPINSTANCE,0);    
+    SetWindowTheme( hwnd , L"" , L"" );
+    //SetLayeredWindowAttributes( hwnd , 0 , 192 , 0 );
 
     // Process windows messages
     // *** all messages(events) will be read converted/dispatched here ***
     UpdateWindow( hwnd );
+    ShowWindow( hwnd , SW_SHOW );
+        
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {
         //if (IsDialogMessage( hWnd ,@wMsg )) { continue; }
