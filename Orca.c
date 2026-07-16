@@ -5,7 +5,7 @@
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
-#include <uxtheme.h>
+//#include <uxtheme.h>
 
 static void defines () { //defines
     #define STRINGIFY(x) #x
@@ -40,6 +40,8 @@ HMENU g_hCurMenu=NULL;
 #include "modules\wndCreate.c"
 #include "modules\menu.c"
 
+HRESULT (*fnSetWindowTheme) (HWND,LPCWSTR,LPCWSTR) = NULL;
+  
 DWORD g_dwEnableSizeBorder = 0;
 static void UpdateSizeBorder( HWND hwnd , DWORD dwStyle ) {
     RECT rc ; GetWindowRect( hwnd , &rc );
@@ -175,6 +177,11 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
    ********************************************************************* */
 int main() {
 
+    _auto hUxTheme = LoadLibraryA("uxtheme32.dll");
+    if (hUxTheme) {
+        fnSetWindowTheme = (void*)GetProcAddress( hUxTheme , "SetWindowTheme" );
+    }
+    
     InitCommonControls();
     g_APPINSTANCE = GetModuleHandle(NULL);
   
@@ -222,7 +229,7 @@ int main() {
     tWndRc.right = tWndRc.left + iWid ; tWndRc.bottom = tWndRc.top + iHei;    
     
     hwnd = CreateWindowEx(cStyleEx,g_pzAppName,g_pzAppName,cStyle,tWndRc.left,tWndRc.top,iWid,iHei,NULL,g_WndMenu,g_APPINSTANCE,0);    
-    SetWindowTheme( hwnd , L"" , L"" );
+    if (fnSetWindowTheme) { fnSetWindowTheme( hwnd , L"" , L"" ); }
     //SetLayeredWindowAttributes( hwnd , 0 , 192 , 0 );
 
     // Process windows messages
