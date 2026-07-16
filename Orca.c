@@ -177,7 +177,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
    ********************************************************************* */
 int main() {
 
-    _auto hUxTheme = LoadLibraryA("uxtheme32.dll");
+    _auto hUxTheme = LoadLibraryA("uxtheme.dll");
     if (hUxTheme) {
         fnSetWindowTheme = (void*)GetProcAddress( hUxTheme , "SetWindowTheme" );
     }
@@ -212,7 +212,7 @@ int main() {
     g_WndMenu = menu_CreateMainMenu();
     
     //windows will ignore first ShowWindow desires... so make a dummy one.
-    //ShowWindow( GetDesktopWindow() , SW_SHOW );
+    ShowWindow( GetDesktopWindow() , SW_SHOW );
 
     // Create the window and show it  
     _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
