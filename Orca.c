@@ -26,15 +26,12 @@ static void defines () { //defines
 }
 
 HINSTANCE g_APPINSTANCE;  //instance
-HFONT g_MainFont;         //fonts
 HMENU g_WndMenu;          //menu
 //AppName
 char* g_pzAppName = "Orca IDE";      
 
 UINT g_CurItemID=0 , g_CurItemState=0; 
 HMENU g_hCurMenu=NULL;
-
-#define _CTL(_ctlId) g_CTL[_ctlId]
 #define _Wnd MAIN
 
 #include "modules\wndCreate.c"
@@ -87,11 +84,11 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                     return 0;
                 }
                 case EN_CHANGE:  {
-                    printf("%i\n,",SendMessage(_CTL(wcEdit),WM_GETTEXTLENGTH,0,0));
+                    printf("%i\n,",SendMessage(_CTL(wID),WM_GETTEXTLENGTH,0,0));
                 } //EN_CHANGE
                 case BN_CLICKED: { //button click            
                     switch (LOWORD(wparam)) {
-                        case wcButton: {
+                        case wcBtnCmd: {
                             MessageBox( hwnd , "Bye" , "Bye" , MB_ICONINFORMATION );
                             PostQuitMessage(0);                            
                             break;
@@ -133,9 +130,9 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             break;
         }
         case WM_SIZE:    {
-            puts("Size changed?");
-            RECT rc ; GetClientRect( hwnd , &rc );
-            printf("%ix%i\n",rc.right,rc.bottom);
+            wndResize( hwnd );
+            //puts("Size changed?");            
+            //printf("%ix%i\n", g_tMain.iW , g_tMain.iH);
             break;
         }
         case WM_MENUSELECT: { //track newest menu handle/item/state
@@ -213,7 +210,7 @@ int main() {
         
     // Create the window and show it  
     _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
-    _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE) & ~WS_THICKFRAME ; //';
+    _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE) & ~WS_THICKFRAME ;
     RECT tWndRc = {0,0,640,480}, tWorkRc;
     AdjustWindowRectEx( &tWndRc , cStyle , TRUE , cStyleEx );
     
@@ -232,11 +229,14 @@ int main() {
     // Process windows messages
     // *** all messages(events) will be read converted/dispatched here ***
     UpdateWindow( hwnd );
-    ShowWindow( hwnd , SW_SHOWMAXIMIZED );
+    ShowWindow( hwnd , SW_SHOWMAXIMIZED ); //SW_SHOW
         
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {
         //if (IsDialogMessage( hWnd ,@wMsg )) { continue; }
+        if ( (wMsg.message == WM_MOUSEMOVE) && (wMsg.hwnd != hwnd) ) {
+            SendMessage( hwnd , WM_NCMOUSEMOVE , HTCLIENT , 0 );
+        }
         TranslateMessage( &wMsg );
         DispatchMessage( &wMsg );  
     } //while
