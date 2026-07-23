@@ -7,6 +7,8 @@
 #include <commctrl.h>
 //#include <uxtheme.h>
 
+//#define _StartMaximized
+
 static void defines () { //defines
     #define STRINGIFY(x) #x
     #define TOSTRING(x) STRINGIFY(x)
@@ -34,6 +36,7 @@ UINT g_CurItemID=0 , g_CurItemState=0;
 HMENU g_hCurMenu=NULL;
 #define _Wnd MAIN
 
+#include "controls\Diagram.c"
 #include "modules\wndCreate.c"
 #include "modules\menu.c"
 
@@ -130,6 +133,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             break;
         }
         case WM_SIZE:    {
+            if (wparam == SIZE_MINIMIZED) { break; }  // resizing flag 
             wndResize( hwnd );
             //puts("Size changed?");            
             //printf("%ix%i\n", g_tMain.iW , g_tMain.iH);
@@ -178,8 +182,7 @@ int main() {
     if (hUxTheme) {
         fnSetWindowTheme = (void*)GetProcAddress( hUxTheme , "SetWindowTheme" );
     }
-    
-    InitCommonControls();
+        
     g_APPINSTANCE = GetModuleHandle(NULL);
   
     MSG wMsg = {0};
@@ -206,12 +209,14 @@ int main() {
         return 1;
     }
     
-    g_WndMenu = menu_CreateMainMenu();
+    InitCommonControls();
+    Diagram_Init(g_APPINSTANCE);
+    g_WndMenu = menu_CreateMainMenu();    
         
     // Create the window and show it  
     _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
-    _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN | WS_MAXIMIZE) & ~WS_THICKFRAME ;
-    RECT tWndRc = {0,0,640,480}, tWorkRc;
+    _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN) & ~WS_THICKFRAME ;
+    RECT tWndRc = {0,0,960,640}, tWorkRc;
     AdjustWindowRectEx( &tWndRc , cStyle , TRUE , cStyleEx );
     
     //center it in the workarea
@@ -229,7 +234,11 @@ int main() {
     // Process windows messages
     // *** all messages(events) will be read converted/dispatched here ***
     UpdateWindow( hwnd );
-    ShowWindow( hwnd , SW_SHOWMAXIMIZED ); //SW_SHOW
+    #ifdef _StartMaximized
+        ShowWindow( hwnd , SW_SHOWMAXIMIZED ); //SW_SHOW
+    #else
+        ShowWindow( hwnd , SW_SHOW );
+    #endif
         
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {

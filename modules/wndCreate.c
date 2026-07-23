@@ -1,11 +1,11 @@
 #define _ForEachControl( _Do ) \
-    /*      ID           , ExStyle ,    Class   ,      Caption     ,      Style     , xPos , yPos , Width,Height */\
-    _Do( wcPanComponents ,  cBsc   , "listbox"   , "Components"     , cPanelStyle    ,    0 ,    0 ,  2000, 7500 ) \
-    _Do( wcPanCode       ,  cBsc   , "listbox"   , "Code"           , cCodeStyle     , 2000 ,    0 ,  6000, 7500 ) \
-    _Do( wcPanProperties ,  cBsc   , "listbox"   , "Properties"     , cPanelStyle    , 8000 ,    0 ,  2000, 7500 ) \
-    _Do( wcEdtConsole    ,  cBrd   , "edit"     , "Console..."     , cTxtStyle      ,    0 , 7500 , 10000 , 2000 ) \
-    _Do( wcBtnCmd        ,    0    , "button"   , "Cmd ->"         , cStyle         ,    0 , 9500 ,  -800 , -125 ) \
-    _Do( wcEdtCmd        ,  cBrd   , "edit"     , ""               , cEdtStyle      , -800 , 9500 ,  95000, -125 )
+    /*      ID           , ExStyle ,    Class        ,      Caption     ,      Style     , xPos , yPos , Width,Height */\
+    _Do( wcPanComponents ,  cBsc   , "listbox"       , "Components"     , cPanelStyle    ,    0 ,    0 ,  2000, 7500 ) \
+    _Do( wcPanCode       ,    0    , "Diagram"       , NULL             , cCodeStyle     , 2000 ,    0 ,  6000, 7500 ) \
+    _Do( wcPanProperties ,  cBsc   , "listbox"       , "Properties"     , cPanelStyle    , 8000 ,    0 ,  2000, 7500 ) \
+    _Do( wcEdtConsole    ,  cBrd   , "edit"          , "Console..."     , cTxtStyle      ,    0 , 7500 , 10000 , 2000 ) \
+    _Do( wcBtnCmd        ,    0    , "button"        , "Cmd ->"         , cStyle         ,    0 , 9500 ,  -800 , -125 ) \
+    _Do( wcEdtCmd        ,  cBrd   , "edit"          , ""               , cEdtStyle      , -800 , 9500 ,  95000, -125 )
 /*----------------------------------------------------------------------------------------------------------- */
 
 typedef struct {
@@ -84,8 +84,8 @@ void wndResize( HWND hwnd ) {
             w->iPY = (w->iY < 0) ? (_Twp2Y(w->iY)) : (_Pct2Y(w->iY)); // > decide if percent (positive)
             w->iPW = (w->iW < 0) ? (_Twp2X(w->iW)) : (_Pct2X(w->iW)); //   or twips (negative) are used.
             w->iPH = (w->iH < 0) ? (_Twp2Y(w->iH)) : (_Pct2Y(w->iH)); //
-            printf("%i , x=%i(%i) , y=%i(%i) , w=%i(%i) , h=%i(%i)\n" , 
-                i, w->iX,w->iPX , w->iY,w->iPY , w->iW,w->iPW , w->iH,w->iPH );
+            /*printf("%i , x=%i(%i) , y=%i(%i) , w=%i(%i) , h=%i(%i)\n" , 
+                i, w->iX,w->iPX , w->iY,w->iPY , w->iW,w->iPW , w->iH,w->iPH );*/
             DeferWindowPos( pDefer , w->hwnd , NULL , w->iPX,w->iPY, w->iPW,w->iPH , SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW );
         } _endwith
     }    
@@ -107,7 +107,7 @@ LRESULT wndCreate( HWND hwnd ) {
     _const cEdtStyle = cStyle | ES_AUTOHSCROLL;     
     _const cTxtStyle = cStyle | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | ES_MULTILINE;    
     _const cPanelStyle = cStyle | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
-    _const cCodeStyle = cPanelStyle | WS_HSCROLL;
+    _const cCodeStyle = cStyle | WS_HSCROLL | WS_VSCROLL;
     
     _const cBrd = WS_EX_CLIENTEDGE;
     _const cBsc = WS_EX_DLGMODALFRAME;
