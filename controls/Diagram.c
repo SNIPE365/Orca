@@ -9,15 +9,16 @@ typedef enum {
 
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
     static HBITMAP hBmBuffer;
+    static HFONT hCtlFont;
     static HDC hDcBuffer;
     static int iBufWid,iBufHei,iDrawn=1;
-    _const cBack=0xFFFFFF ; _const cObject=0xFF8844 ;
-    static HBRUSH hbBack , hbObject ;
+    _const cBack=0xFFFFFF ; _const cObject=0xFF8844 ; _const cGrid=0xEEEEEE;
+    static HBRUSH hbBack , hbBackGrid , hbObject ;
     
     #define SetUpdate() if (iDrawn) { iDrawn=0 ; SetTimer( hwnd , dmtRedraw , 10 , NULL ); }
     
     _const NumObjs = 33;
-    _const ObjHei = 55;
+    _const ObjHei = 56;
     
     switch (message) {
         case WM_ERASEBKGND: { return 1; }
@@ -72,19 +73,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_TIMER: {           //TIMER events (REDRAW!)            
             if (iDrawn==1) { return 0; }            
             HDC hdc = hDcBuffer;
-            RECT tRc = {0,0,iBufWid,iBufHei};
-            FillRect( hdc , &tRc , GetStockObject( WHITE_BRUSH ) );
-            SetBkMode( hdc , TRANSPARENT );            
+            RECT tRc = {0,0,iBufWid,iBufHei};            
             
             int iViewY = GetScrollPos( hwnd , SB_VERT ) , iStartIdx = iViewY/ObjHei;
             int iPosY = iStartIdx*ObjHei-iViewY;
+            
+            SetBrushOrgEx( hdc , 0 , 4-(iViewY & 7) , NULL );
+            FillRect( hdc , &tRc , hbBackGrid );
+            SetBkMode( hdc , TRANSPARENT );
+            
             
             for (int iIndex=iStartIdx ; (iPosY < iBufHei) && (iIndex < NumObjs) ; iIndex++) {
                 SelectObject( hdc , hbObject );
                 RECT tObjRc = {10,iPosY,100,iPosY+50};
                 RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );                
                 char zBuff[16]; 
-                DrawText( hdc , zBuff , sprintf ( zBuff , "%i" , iIndex ) , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
+                DrawText( hdc , zBuff , sprintf ( zBuff , "Obj%i" , iIndex ) , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
                 if (iIndex < (NumObjs-1)) {
                     MoveToEx( hdc , 55 , iPosY+50 , NULL ); LineTo( hdc , 55 , iPosY+55 );
                 }
@@ -103,7 +107,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             HDC hdc = GetDC( hwnd );
             if (!hDcBuffer) { 
                 hDcBuffer = CreateCompatibleDC( hdc ); 
-                SelectObject( hdc , (HFONT)SendMessage(hwnd,WM_GETFONT,0,0) );
+                SelectObject( hdc , hCtlFont );
             }
             hBmBuffer = CreateCompatibleBitmap( hdc , iBufWid , iBufHei );
             DeleteObject( SelectObject( hDcBuffer , hBmBuffer ) );
@@ -114,9 +118,17 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         case WM_CREATE: {          //Initialize control
             EnableScrollBar( hwnd , SB_HORZ , ESB_DISABLE_BOTH );
-            hbBack   = CreateSolidBrush( cBack );
-            hbObject = CreateSolidBrush( cObject );
+            hbBack     = CreateSolidBrush( cBack );
+            hbObject   = CreateSolidBrush( cObject );
+            hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
             return 1;
+        }
+        case WM_SETFONT: {         //Set New Font
+            hCtlFont = (HFONT)wParam; SetUpdate();
+            SelectObject( hDcBuffer , hCtlFont );
+        }
+        case WM_GETFONT: {         //Retrieve Current Font
+            return (LRESULT)hCtlFont;
         }
     }
     
