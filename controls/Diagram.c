@@ -27,7 +27,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 10 , NULL ); }
     
-    static int iObjCount = 0, iObjMaxCount=256 , iMaxX=0, iMaxY=0, iViewX=0, iViewY=0;
+    static int iObjCount=0, iObjMaxCount=256 , iMaxX=0, iMaxY=0, iViewX=0, iViewY=0;
     static int iStartIdx=0, iEndIdx=-1, iSelectedIndex=-1;
     static int iMouseX=0,iMouseY=0;
     
@@ -37,8 +37,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     switch (message) {
         case WM_ERASEBKGND: { return 1; }
         case WM_SETCURSOR: {
-            const POINT pt = { iMouseX , iMouseY };                    
-            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
+            const POINT pt = { iMouseX , iMouseY };
+            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {                
                 _with( *pOrder[iIndex] ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                                        
                     if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; return 0; }
@@ -85,7 +85,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             int nScrollCode = (int)LOWORD(wParam); // scroll bar value
             SCROLLINFO tInfo = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_ALL };
             if (!GetScrollInfo( hwnd , SB_ , &tInfo )) {
-                //puts("Failed to get diagram scroll info");
+                puts("Failed to get diagram scroll info");
             }
             switch (nScrollCode) {
                 case SB_TOP:           { tInfo.nPos = tInfo.nMin; break; }
@@ -100,7 +100,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
             tInfo.fMask = SIF_POS;            
             if (!SetScrollInfo( hwnd , SB_ , &tInfo , true )) {
-                //puts("Failed to set diagram scroll info");
+                puts("Failed to set diagram scroll info");
             }
             SetUpdate();
             return 0;
@@ -118,7 +118,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             SetBkMode( hdc , TRANSPARENT );
             
             //check if there's previous items that are visible (caused by moving or scroll up)
-            if (!pOrder) { return 0; }            
+            if (!pOrder) { return 0; }   
+            
+            puts("drawing start");
+            
             for ( ; iStartIdx>0 ; iStartIdx-- ) {
                 _with( *pOrder[iStartIdx-1] ) {
                     if ((w->iY+w->iH-iViewY) < 0) { break; }
@@ -159,7 +162,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     
                 } _endwith;
             }
-            iEndIdx=iIndex-1; bDrawn = 1; 
+            
+            iEndIdx=(iIndex < iObjCount ? iIndex-1 : iObjCount-1) ; bDrawn = 1; 
+            puts("drawing end");
             InvalidateRect( hwnd , NULL , true ); UpdateWindow( hwnd );            
             if (wParam) { KillTimer(hwnd,wParam); }
             return 0;
