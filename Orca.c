@@ -230,6 +230,7 @@ int main() {
     
     hwnd = CreateWindowEx(cStyleEx,g_pzAppName,g_pzAppName,cStyle,tWndRc.left,tWndRc.top,iWid,iHei,NULL,g_WndMenu,g_APPINSTANCE,0);    
     if (fnSetWindowTheme) { fnSetWindowTheme( hwnd , L"" , L"" ); }
+    //fnSetWindowTheme( g_CTL[ wcDiagram ].hwnd , L"" , L"" );
     //SetLayeredWindowAttributes( hwnd , 0 , 192 , 0 );
 
     // Process windows messages
