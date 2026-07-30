@@ -83,7 +83,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_VSCROLL: {
             _const SB_ = (message==WM_VSCROLL ? SB_VERT : SB_HORZ);
             int nScrollCode = (int)LOWORD(wParam); // scroll bar value
-            SCROLLINFO tInfo = { .fMask = SIF_ALL };
+            SCROLLINFO tInfo = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_ALL };
             if (!GetScrollInfo( hwnd , SB_ , &tInfo )) {
                 //puts("Failed to get diagram scroll info");
             }
@@ -125,13 +125,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 } _endwith;
             }
             
-            for (int iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
+            int iIndex;
+            for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
                 _with( *pOrder[iIndex] ) {
                     //check/skip if item is invisible (caused by moving or scroll down)
                     if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }                    
                     //clculate position Y and see if it's after the visible area (early stop)
                     int iPosY = w->iY-iViewY, iPosX = w->iX-iViewX;
-                    if (iPosY >= iBufHei) { iEndIdx=iIndex-1 ; break; }
+                    if (iPosY >= iBufHei) { break; }
                     //skip object if outside horizontal range
                     if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }                    
                     //render object
@@ -158,7 +159,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     
                 } _endwith;
             }
-            bDrawn = 1; InvalidateRect( hwnd , NULL , true ); UpdateWindow( hwnd );            
+            iEndIdx=iIndex-1; bDrawn = 1; 
+            InvalidateRect( hwnd , NULL , true ); UpdateWindow( hwnd );            
             if (wParam) { KillTimer(hwnd,wParam); }
             return 0;
         }
@@ -174,9 +176,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
             hBmBuffer = CreateCompatibleBitmap( hdc , iBufWid , iBufHei );
             DeleteObject( SelectObject( hDcBuffer , hBmBuffer ) );
-            SCROLLINFO tInfoH = { .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nWid , .nMin = 0 , .nMax = iMaxX };
+            SCROLLINFO tInfoH = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nWid , .nMin = 0 , .nMax = iMaxX };
             SetScrollInfo( hwnd , SB_HORZ , &tInfoH , true );            
-            SCROLLINFO tInfoV = { .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nHei , .nMin = 0 , .nMax = iMaxY };            
+            SCROLLINFO tInfoV = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nHei , .nMin = 0 , .nMax = iMaxY };
             SetScrollInfo( hwnd , SB_VERT , &tInfoV , true );
             bUpdateScroll = 1;
             SetUpdate();
@@ -187,7 +189,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //fwKeys = LOWORD(wParam);    // key flags            
             //xPos = (short) LOWORD(lParam);    // horizontal position of pointer
             //yPos = (short) HIWORD(lParam);    // vertical position of pointer            
-            SCROLLINFO tInfo = { .fMask = SIF_ALL };
+            SCROLLINFO tInfo = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_ALL };
             GetScrollInfo( hwnd , SB_VERT , &tInfo );
             tInfo.nPos = min( tInfo.nPos+zDelta/-2 , tInfo.nMax );
             tInfo.fMask = SIF_POS;
@@ -243,6 +245,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         case WM_LBUTTONDOWN: {     //Button pressed
             int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
+            //printf("%i to %i\n",iStartIdx,iEndIdx);
             for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
                 _with( *pOrder[iIndex] ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                    
