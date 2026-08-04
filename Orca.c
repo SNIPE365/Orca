@@ -6,6 +6,8 @@
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
+#include <timeapi.h>
+
 //#include <uxtheme.h>
 
 //#define _StartMaximized
@@ -26,6 +28,13 @@ static void defines () { //defines
         #define _constexpr( _parms... ) enum { _parms }
     #endif
     //_constexpr( test = 100 ); _constexpr( test2 = 110 );
+    
+    #define SWAP(_a, _b) do { \
+        typeof(_a) _temp = (_a); \
+        (_a) = (_b); \
+        (_b) = _temp; \
+    } while(0)
+    
 }
 
 HINSTANCE g_APPINSTANCE;  //instance
@@ -40,6 +49,7 @@ HMENU g_hCurMenu=NULL;
 #include "controls\Diagram.c"
 #include "modules\wndCreate.c"
 #include "modules\menu.c"
+
 
 HRESULT (*fnSetWindowTheme) (HWND,LPCWSTR,LPCWSTR) = NULL;
   
@@ -210,6 +220,7 @@ int main() {
         return 1;
     }
     
+    timeBeginPeriod(1);
     InitCommonControls();
     Diagram_Init(g_APPINSTANCE);
     g_WndMenu = menu_CreateMainMenu();    
@@ -229,8 +240,10 @@ int main() {
     tWndRc.right = tWndRc.left + iWid ; tWndRc.bottom = tWndRc.top + iHei;    
     
     hwnd = CreateWindowEx(cStyleEx,g_pzAppName,g_pzAppName,cStyle,tWndRc.left,tWndRc.top,iWid,iHei,NULL,g_WndMenu,g_APPINSTANCE,0);    
-    if (fnSetWindowTheme) { fnSetWindowTheme( hwnd , L"" , L"" ); }
-    if (fnSetWindowTheme) { fnSetWindowTheme( g_CTL[ wcDiagram ].hwnd , L"" , L"" ); }
+    if (fnSetWindowTheme) { 
+        fnSetWindowTheme( hwnd , L"" , L"" ); 
+        fnSetWindowTheme( g_CTL[ wcDiagram ].hwnd , L"" , L"" ); 
+    }
     //SetLayeredWindowAttributes( hwnd , 0 , 192 , 0 );
 
     // Process windows messages
@@ -240,8 +253,7 @@ int main() {
         ShowWindow( hwnd , SW_SHOWMAXIMIZED ); //SW_SHOW
     #else
         ShowWindow( hwnd , SW_SHOW );
-    #endif
-        
+    #endif        
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {
         //if (IsDialogMessage( hWnd ,@wMsg )) { continue; }
