@@ -50,7 +50,6 @@ HMENU g_hCurMenu=NULL;
 #include "modules\wndCreate.c"
 #include "modules\menu.c"
 
-
 HRESULT (*fnSetWindowTheme) (HWND,LPCWSTR,LPCWSTR) = NULL;
   
 DWORD g_dwEnableSizeBorder = 0;
@@ -245,6 +244,8 @@ int main() {
         fnSetWindowTheme( g_CTL[ wcDiagram ].hwnd , L"" , L"" ); 
     }
     //SetLayeredWindowAttributes( hwnd , 0 , 192 , 0 );
+    
+    SetFocus( g_CTL[ wcDiagram ].hwnd );
 
     // Process windows messages
     // *** all messages(events) will be read converted/dispatched here ***

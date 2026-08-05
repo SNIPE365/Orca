@@ -92,7 +92,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetBrushOrgEx( hdc , 1 , 4-(iViewY & 7) , NULL );
         SetBrushOrgEx( hdc , 4 , 4-(iViewY & 7) , NULL );
         FillRect( hdc , &tRc , hbBackGrid );
-        SetBkMode( hdc , TRANSPARENT );        
+        SetBkMode( hdc , TRANSPARENT );
+        if (GetFocus()==hwnd) { DrawFocusRect( hdc , &tRc ); }
         
         if (!piOrder) { return; }
         //puts("drawing start");
@@ -148,6 +149,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }; //void DrawWindow(void)
     int InsertObject( int iPosX , int iPosY ) {
         
+        puts("Insert Object");
+        
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
             iObjMaxCount += _MaxGap;
@@ -170,7 +173,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             w->iY = iPosY; 
             w->iH = (32+(rand() % 64)) & (~7);
             w->bColor = rand() % 6;
-            sprintf(w->zCaption , "Obj%i", iObjCount+1 );
+            sprintf(w->zCaption , "Obj%i", iObjCount+1 );            
+            if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
         iObjCount++;
         SetUpdate();        
@@ -408,6 +413,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return (LRESULT)hCtlFont;
         }
         case WM_KEYDOWN: {         //Key pressed
+            printf("Keydown: %i\n",wParam);
             switch (wParam) {
                 case VK_INSERT: {
                     InsertObject( iViewX+iMouseX , iViewY+iMouseY );
@@ -417,6 +423,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return 0;
         }
         case WM_LBUTTONDOWN: {     //Button pressed
+            SetFocus(hwnd);
             int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
             //printf("%i to %i\n",iStartIdx,iEndIdx);
             for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
@@ -440,6 +447,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (bDragging) { SetCapture( NULL ); }
             if (bDragging>1) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
             bDragging = 0; return 0;
+        }
+        case WM_KILLFOCUS:         //Lost Focus
+        case WM_SETFOCUS: {        //Got Focus
+          SetUpdate();
+          return 0;
         }
     }
     
