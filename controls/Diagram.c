@@ -1,6 +1,6 @@
 typedef struct {
     int32_t iY;
-    uint32_t iIndex;
+    //uint32_t iIndex;
     int16_t iX;
     uint8_t iW,iH;
     char zCaption[15];
@@ -36,6 +36,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     _const _MaxGap = 128;
     
     static int iObjCount=0, iObjMaxCount=_MaxGap; //object counting / limit
+    static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object    
     static int iViewX=0, iViewY=0;                //scrolling offset
     static int iMaxXIdx=-1 , iMaxYIdx=-1;         //indexes for the objects that have the maximum position (cache)
@@ -48,6 +49,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     
     static DiagramObjectStruct* ptObjects = NULL;
     static uint32_t* piOrder = NULL;
+    static uint32_t* piFreeSlot = NULL;
             
     // ------------- Diagram functions -------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -147,10 +149,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         InvalidateRect( hwnd , NULL , true ); //UpdateWindow( hwnd );
         return;
     }; //void DrawWindow(void)
-    int InsertObject( int iPosX , int iPosY ) {
-        
-        puts("Insert Object");
-        
+    int InsertObject( int iPosX , int iPosY ) {        
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
             iObjMaxCount += _MaxGap;
@@ -158,6 +157,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             ptObjects = realloc( ptObjects , iObjMaxCount*sizeof(DiagramObjectStruct) );
             //todo: check for faillure
         }
+        
+        //put the index last in the list and then...
+        //bubble it up till the right order (insertion sort)
+        //since the list is sorted technically i could use binary search
+        //to locate the position, but a "memmove" would still be required
+        //to insert into the position, since this is not a linked list
+        //and if this was a linked list then i could put the index into the 
+        //data itself, but it would need to be a double linked list. or a slow check
         int iNew;
         for (iNew = iObjCount ; iNew > 0 ; iNew--) {
             _with( aObject(iNew-1) ) {
@@ -165,21 +172,89 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
               piOrder[iNew] = piOrder[iNew-1];
             } _endwith;
         }   
-        piOrder[iNew] = iObjCount;
-        _with( ptObjects[iObjCount] ) {
-            w->iIndex = iNew;
+        
+        //if there's holes, fill them now, and erase the slot from list
+        //since the order here does not matter we just move the last
+        //to fill the slot that will be used now
+        //if there's no free slots, it's safe to assume that the last
+        //iObjCount (last slot) is the new free one
+        int iNewSlot = iObjCount;
+        if (iFreeSlotCount) {
+            iNewSlot = piFreeSlot[0];            
+            piFreeSlot[0] = piFreeSlot[--iFreeSlotCount];
+            //reallocate the array if it gets too small
+            if ((iFreeSlotCount & (_MaxGap-1)) == (_MaxGap/2)) {
+                piFreeSlot = realloc( piFreeSlot , ((iFreeSlotCount | (_MaxGap-1))+1)*sizeof(*piFreeSlot));
+            }
+        }
+        
+        //initialize new slot
+        piOrder[iNew] = iNewSlot;
+        _with( ptObjects[iNewSlot] ) {
+            //w->iIndex = iNew;
             w->iX = iPosX;
             w->iW = (48+(rand() % 120)) & (~7);
             w->iY = iPosY; 
             w->iH = (32+(rand() % 64)) & (~7);
             w->bColor = rand() % 6;
-            sprintf(w->zCaption , "Obj%i", iObjCount+1 );            
+            sprintf(w->zCaption , "Obj%i", iObjTotal+1 );            
             if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
-        iObjCount++;
-        SetUpdate();        
-    }    
+        iObjCount++; iObjTotal++;
+        iSelectedIndex = iNew;
+        SetUpdate();
+        return iNew;
+    }
+    int RemoveObject( int iIndex ) {
+        
+        //don't remove if object is being dragged
+        if ( iSelectedIndex == iIndex && bDragging ) { 
+            bDragging = 1 ; SendMessage( hwnd , WM_LBUTTONUP , 0 , 0 );
+        }        
+        
+        //mark object as empty and add it to the end of free slot list
+        //also grab end of X,Y to check if it was at limit of view area
+        int iSlot = piFreeSlot[ iFreeSlotCount ] = piOrder[iIndex];
+        int iXX,iYY;         
+        _with( ptObjects[iSlot] ) {            
+            iXX = w->iX + w->iW;
+            iYY = w->iY + w->iH;
+            w->iW = 0;
+        } _endwith;
+        
+        //should we reallocate free slot list, or coalesce list when this happens?
+        iFreeSlotCount++;
+        if ((iFreeSlotCount & ((_MaxGap)-1))==0) {
+            piFreeSlot = realloc( piFreeSlot , (iFreeSlotCount+_MaxGap)*sizeof(*piFreeSlot) );
+        }
+        
+        //removing last is simple but otherwise we need to close the gap
+        iObjCount--;
+        if (iIndex != iObjCount) {
+            memmove( piOrder+iIndex , piOrder+iIndex+1 , sizeof(*piOrder)*(iObjCount-iIndex) );
+        }
+        
+        if ( iSelectedIndex == iIndex ) {            
+            if ( !iObjCount || (iSelectedIndex > 0) ) { iSelectedIndex--; }        
+        }
+        
+        if (iIndex == iStartIdx) { iStartIdx++; }
+        if (iIndex == iEndIdx) { iEndIdx--; }
+        
+        /*todo: need to shrink at some point, but can't shrink if there's holes
+            would require to shrink the arrays independently? (so storage is kept, but index is resized)
+            would need to fill the holes of storage from the end? (also require tracking sizes independently)
+            filling the holes could mean sorting the storage? (slower) or just adjust all slots that changed
+                todo that need to either keep a reverse index, do a slow index lookup, or create a temporary reverse index?
+        */
+                
+        //if deleted piece was on the workarea limit, recalculate the limit.
+        if ( (iXX == iMaxX) || (iYY == iMaxY) ) { iMaxXIdx = -1 ; ScrollUpdate( hwnd , -1 , - 1 ); }
+        
+        SetUpdate();
+        return 1;        
+    }
     
     // ------------- Message dispatch --------------
     switch (message) {
@@ -381,7 +456,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
             
             ptObjects = malloc(iObjMaxCount*sizeof(DiagramObjectStruct));
-            piOrder = malloc(iObjMaxCount*sizeof(uint32_t));
+            piOrder = malloc(iObjMaxCount*sizeof(*piOrder));
+            piFreeSlot = malloc(_MaxGap*sizeof(*piFreeSlot));
             
             // generate semi-random objects for initial tests
             int iPosY=0, iPosX=0, iBigRow ; iObjCount = 32;
@@ -389,7 +465,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 piOrder[N] = N;
                 if (!iPosX) { iPosX = (rand() % 256) & (~7); iBigRow = 0; }
                 _with( ptObjects[N] ) {
-                    w->iIndex = N;
+                    //w->iIndex = N;
                     w->iX = iPosX;
                     w->iW = (48+(rand() % 120)) & (~7);
                     w->iY = iPosY; 
@@ -401,6 +477,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     
                 } _endwith;
             }
+            iObjTotal = iObjCount;
             
             
             return 1;
@@ -413,10 +490,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return (LRESULT)hCtlFont;
         }
         case WM_KEYDOWN: {         //Key pressed
-            printf("Keydown: %i\n",wParam);
+            //printf("Keydown: %i\n",wParam);
             switch (wParam) {
+                case VK_UP    : { return SendMessage( hwnd , WM_VSCROLL , SB_LINEUP   , 0); }
+                case VK_DOWN  : { return SendMessage( hwnd , WM_VSCROLL , SB_LINEDOWN , 0); }
+                case VK_PRIOR : { return SendMessage( hwnd , WM_VSCROLL , SB_PAGEUP   , 0); }
+                case VK_NEXT  : { return SendMessage( hwnd , WM_VSCROLL , SB_PAGEDOWN , 0); }
+                case VK_HOME  : { return (GetKeyState(VK_CONTROL) << 1) ? SendMessage( hwnd , WM_VSCROLL , SB_TOP    , 0) : 0; }
+                case VK_END   : { return (GetKeyState(VK_CONTROL) << 1) ? SendMessage( hwnd , WM_VSCROLL , SB_BOTTOM , 0) : 0; }
+                case VK_LEFT  : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0); }
+                case VK_RIGHT : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0); }
                 case VK_INSERT: {
                     InsertObject( iViewX+iMouseX , iViewY+iMouseY );
+                    break;
+                }
+                case VK_DELETE: {
+                    if (iSelectedIndex != -1) { RemoveObject( iSelectedIndex ); }
                     break;
                 }
             } //switch

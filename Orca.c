@@ -6,7 +6,6 @@
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
-#include <timeapi.h>
 
 //#include <uxtheme.h>
 
