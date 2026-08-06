@@ -14,8 +14,8 @@
     _Do( wcDgmSelect     ,    0    , "ComboBox"  , cComboStyle  , _PrevCtl()  , _StP(0, 0)           , _NextCtl()  , _StT(0,1.25)         , NULL            ) \
     _Do( wcPanProperties ,  cBsc   , "listbox"   , cPanelStyle  , _StP(0,80)  , _StP(0, 0)           , _StP(0, 20) , _StP(wcEdtConsole,0) , "Properties"    ) \
     _Do( wcDiagram       ,    0    , "Diagram"   , cCodeStyle   , _StP(0,20)  , _EnT(wcDgmSelect,.25), _StP(0, 60) , _StP(wcEdtConsole,0) , NULL            ) \
-    _Do( wcEdtConsole    ,  cBrd   , "edit"      , cTxtStyle    , _StP(0, 0)  , _StP(0,75)           , _StP(0,100) , _EnT(0,-1.25)        , "Console..."    ) \
-    _Do( wcBtnCmd        ,    0    , "button"    , cStyle       , _StP(0, 0)  , _EnP(wcEdtConsole,0) , _StT(0,8.0) , _StT(0,1.25)         , "Cmd ->"        ) \
+    _Do( wcEdtConsole    ,  cBrd   , "edit"      , cTxtStyle    , _StP(0, 0)  , _StP(0,75)           , _StP(0,100) , _EnT(0,-1.25)        , NULL            ) \
+    _Do( wcBtnBuild      ,    0    , "button"    , cStyle       , _StP(0, 0)  , _EnP(wcEdtConsole,0) , _StT(0,8.0) , _StT(0,1.25)         , "Build"         ) \
     _Do( wcEdtCmd        ,  cBrd   , "edit"      , cEdtStyle    , _PrevCtl()  , _EnP(wcEdtConsole,0) , _StP(0, 95) , _StT(0,1.25)         , ""              )
 /*----------------------------------------------------------------------------------------------------------- */
 

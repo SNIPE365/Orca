@@ -1,7 +1,10 @@
 #define main_module Orca
 
+#define _GNU_SOURCE
 #include <stdio.h>
+#include <stdarg.h>
 #include <stdlib.h>
+#include <string.h>
 #include <stdint.h>
 #include <stdbool.h>
 #include <windows.h>
@@ -11,40 +14,21 @@
 
 //#define _StartMaximized
 
-static void defines () { //defines
-    #define STRINGIFY(x) #x
-    #define TOSTRING(x) STRINGIFY(x)
-    #define _err( _msg... ) static_assert( 0 , _msg )
-
-    #define _auto __auto_type
-    #define _const const __auto_type
-    #define _with(_var) { _const w = &_var;
-    #define _endwith }
-
-    #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)    
-        #define _constexpr( _parms... ) constexpr __auto_type _parms
-    #else
-        #define _constexpr( _parms... ) enum { _parms }
-    #endif
-    //_constexpr( test = 100 ); _constexpr( test2 = 110 );
-    
-    #define SWAP(_a, _b) do { \
-        typeof(_a) _temp = (_a); \
-        (_a) = (_b); \
-        (_b) = _temp; \
-    } while(0)
-    
-}
-
 HINSTANCE g_APPINSTANCE;  //instance
 HMENU g_WndMenu;          //menu
 //AppName
-char* g_pzAppName = "Orca IDE";      
+const static char* g_pzAppName = "Orca IDE";      
+const static char* g_BinaryGCC[] = {
+    "g:\\_OldMingw\\mingw-w64-10.0.0\\bin\\gcc.exe",    
+    "gcc.exe",    
+    "%gcc%", 
+};
 
 UINT g_CurItemID=0 , g_CurItemState=0; 
 HMENU g_hCurMenu=NULL;
 #define _Wnd MAIN
 
+#include "modules\helpers.c"
 #include "controls\Diagram.c"
 #include "modules\wndCreate.c"
 #include "modules\menu.c"
@@ -66,6 +50,82 @@ static void UpdateSizeBorder( HWND hwnd , DWORD dwStyle ) {
     DeferWindowPos( pDefer , hwnd , NULL , rc.left,rc.top , rc.right-rc.left,rc.bottom-rc.top , cSwp );
     EndDeferWindowPos( pDefer );
 }    
+
+// Assuming your edit control handle is declared globally somewhere
+extern HWND g_ConsoleEdit; 
+
+void ConsolePrintf(const char* format, ...) {
+    if (!_CTL(wcEdtConsole)) { return; }
+
+    va_list args;
+    va_start(args, format);
+
+    char* buffer = NULL;
+    int len = vasprintf(&buffer, format, args);
+    va_end(args);
+
+    // vasprintf returns -1 on allocation failure or formatting error
+    if (len >= 0 && buffer != NULL) {
+        int textLen = GetWindowTextLengthA(_CTL(wcEdtConsole));
+        SendMessageA(_CTL(wcEdtConsole), EM_SETSEL, (WPARAM)textLen, (LPARAM)textLen);
+        SendMessageA(_CTL(wcEdtConsole), EM_REPLACESEL, FALSE, (LPARAM)buffer);
+        SendMessageA(_CTL(wcEdtConsole), EM_SCROLLCARET, 0, 0);
+        free(buffer); // Clean up allocated memory
+    }
+}
+
+static int ProjectBuild() {
+    int iMaxSz=0, i, iGccLen, iResult=0;
+    
+    //buffers that auto clean at end
+    char *pzCompiler = NULL, *pzFileIn = NULL , *pzFileExt = NULL;
+    
+    //searching for toolchain    
+    for (i=_countof(g_BinaryGCC)-1 ; i>=0 ; i--) {        
+        iGccLen = ExpandEnvironmentStrings( g_BinaryGCC[i] , pzCompiler , iMaxSz );
+        if (iGccLen > iMaxSz) { iMaxSz=iGccLen+128 ; pzCompiler = realloc(pzCompiler , iMaxSz) ; i++ ; continue; }
+        if (GetFileAttributes( pzCompiler ) != 0xFFFFFFFF) { break; }
+    }
+    if (i<0) { goto _Cleanup; }
+    
+    //toolchain found
+    ConsolePrintf("compiler = '%s'\n" , pzCompiler );
+    
+    { //get version 
+        char* pzCmd   = NULL ; int iCmdLen    = asprintf(&pzCmd, "%s -v", pzCompiler);
+        char* pzOutput = NULL; int iOutputLen = ReadProcessOutput( pzCmd , &pzOutput , NULL , 5000 );
+        strrchr( pzOutput , '\n' )[0] = ' ';
+        if (iOutputLen) { ConsolePrintf( "%s\n" , strrchr( pzOutput , '\n' )); };
+        free(pzCmd); free(pzOutput);
+    }
+    
+    { //test compile faillure
+        DWORD dwResu;
+        _const pzFile = "file";        
+        asprintf( &pzFileIn  , "%s.c" , pzFile ); //cleanup at end
+        asprintf( &pzFileExt , "%s.exe" , pzFile ); //cleanup at end
+        
+        char* pzCmd   = NULL ; int iCmdLen    = asprintf(&pzCmd, "%s %s -o %s", pzCompiler,pzFileIn,pzFileExt);
+        char* pzOutput = NULL; int iOutputLen = ReadProcessOutput( pzCmd , &pzOutput , &dwResu , 0 );        
+        if (iOutputLen) { ConsolePrintf( "%s" , pzOutput ); };
+        free(pzCmd); free(pzOutput);
+                
+        if (dwResu) { ConsolePrintf( "compilation failed with error %i\n" , (int)dwResu ); goto _Cleanup; }        
+        if (GetFileAttributes( pzFileExt ) == 0xFFFFFFFF) { 
+            ConsolePrintf( "file '%s' was not created.\n" , pzFileExt ); goto _Cleanup;
+        } else {
+            ConsolePrintf( "'%s.c' %1.2fkb -> '%s' %1.2fkb\n" , pzFileIn , GetFileSize64(pzFileIn)/1024.f , pzFileExt , GetFileSize64(pzFileExt)/1024.f );
+            char* pzTemp ; asprintf( &pzTemp , "start %s" , pzFileExt ) ; system( pzTemp ) ; free(pzTemp);
+        }        
+    }
+    
+    //done
+    _Cleanup:
+    if (pzFileIn)   { free(pzFileIn);   }
+    if (pzFileExt)  { free(pzFileExt);  }
+    if (pzCompiler) { free(pzCompiler); }
+    return iResult;
+}
 
 // *************** Procedure Function ****************
 static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lparam ) {  
@@ -96,13 +156,13 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                     return 0;
                 }
                 case EN_CHANGE:  {
-                    printf("%i\n,",SendMessage(_CTL(wID),WM_GETTEXTLENGTH,0,0));
+                    //printf("%i\n",SendMessage(_CTL(wID),WM_GETTEXTLENGTH,0,0));
+                    return 0;
                 } //EN_CHANGE
                 case BN_CLICKED: { //button click            
                     switch (LOWORD(wparam)) {
-                        case wcBtnCmd: {
-                            MessageBox( hwnd , "Bye" , "Bye" , MB_ICONINFORMATION );
-                            PostQuitMessage(0);                            
+                        case wcBtnBuild: {
+                            ProjectBuild();
                             break;
                         } //wcButton
                     } // switch (lparam)

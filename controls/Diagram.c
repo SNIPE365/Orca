@@ -1,6 +1,5 @@
 typedef struct {
-    int32_t iY;
-    //uint32_t iIndex;
+    int32_t iY;    
     int16_t iX;
     uint8_t iW,iH;
     char zCaption[15];
@@ -32,7 +31,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
-    #define aObject(_I) ptObjects[piOrder[_I]]
+    #define aObject(_I) (*ptOrder[_I])
     _const _MaxGap = 128;
     
     static int iObjCount=0, iObjMaxCount=_MaxGap; //object counting / limit
@@ -46,10 +45,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
     static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
     static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
-    
-    static DiagramObjectStruct* ptObjects = NULL;
-    static uint32_t* piOrder = NULL;
-    static uint32_t* piFreeSlot = NULL;
+        
+    static DiagramObjectStruct** ptOrder = NULL;
             
     // ------------- Diagram functions -------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -97,8 +94,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetBkMode( hdc , TRANSPARENT );
         if (GetFocus()==hwnd) { DrawFocusRect( hdc , &tRc ); }
         
-        if (!piOrder) { return; }
+        if (!ptOrder) { return; }
         //puts("drawing start");
+        
+        if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
+        if (iStartIdx < 0) { iStartIdx = 0; }
+        if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
         
         for ( ; iStartIdx>0 ; iStartIdx-- ) {
             _with( aObject(iStartIdx-1) ) {
@@ -153,8 +154,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
             iObjMaxCount += _MaxGap;
-            piOrder = realloc( piOrder , iObjMaxCount*sizeof(uint32_t) );
-            ptObjects = realloc( ptObjects , iObjMaxCount*sizeof(DiagramObjectStruct) );
+            ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
+            printf("Reallocate (expand) to %i objects\n",iObjMaxCount);
             //todo: check for faillure
         }
         
@@ -169,29 +170,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         for (iNew = iObjCount ; iNew > 0 ; iNew--) {
             _with( aObject(iNew-1) ) {
               if ((w->iY) < iPosY) { break; }
-              piOrder[iNew] = piOrder[iNew-1];
+              ptOrder[iNew] = ptOrder[iNew-1];
             } _endwith;
         }   
-        
-        //if there's holes, fill them now, and erase the slot from list
-        //since the order here does not matter we just move the last
-        //to fill the slot that will be used now
-        //if there's no free slots, it's safe to assume that the last
-        //iObjCount (last slot) is the new free one
-        int iNewSlot = iObjCount;
-        if (iFreeSlotCount) {
-            iNewSlot = piFreeSlot[0];            
-            piFreeSlot[0] = piFreeSlot[--iFreeSlotCount];
-            //reallocate the array if it gets too small
-            if ((iFreeSlotCount & (_MaxGap-1)) == (_MaxGap/2)) {
-                piFreeSlot = realloc( piFreeSlot , ((iFreeSlotCount | (_MaxGap-1))+1)*sizeof(*piFreeSlot));
-            }
-        }
-        
+                        
         //initialize new slot
-        piOrder[iNew] = iNewSlot;
-        _with( ptObjects[iNewSlot] ) {
-            //w->iIndex = iNew;
+        ptOrder[iNew] = malloc( sizeof(**ptOrder) );
+        _with( aObject(iNew) ) {            
             w->iX = iPosX;
             w->iW = (48+(rand() % 120)) & (~7);
             w->iY = iPosY; 
@@ -213,42 +198,52 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             bDragging = 1 ; SendMessage( hwnd , WM_LBUTTONUP , 0 , 0 );
         }        
         
-        //mark object as empty and add it to the end of free slot list
-        //also grab end of X,Y to check if it was at limit of view area
-        int iSlot = piFreeSlot[ iFreeSlotCount ] = piOrder[iIndex];
+        //grab end of X,Y to check if it was at limit of view area
         int iXX,iYY;         
-        _with( ptObjects[iSlot] ) {            
+        _with( aObject(iIndex) ) {            
             iXX = w->iX + w->iW;
             iYY = w->iY + w->iH;
             w->iW = 0;
         } _endwith;
-        
-        //should we reallocate free slot list, or coalesce list when this happens?
-        iFreeSlotCount++;
-        if ((iFreeSlotCount & ((_MaxGap)-1))==0) {
-            piFreeSlot = realloc( piFreeSlot , (iFreeSlotCount+_MaxGap)*sizeof(*piFreeSlot) );
-        }
-        
+
+        free( ptOrder[iIndex] ); ptOrder[iIndex] = 0;
+                
         //removing last is simple but otherwise we need to close the gap
         iObjCount--;
         if (iIndex != iObjCount) {
-            memmove( piOrder+iIndex , piOrder+iIndex+1 , sizeof(*piOrder)*(iObjCount-iIndex) );
-        }
-        
-        if ( iSelectedIndex == iIndex ) {            
-            if ( !iObjCount || (iSelectedIndex > 0) ) { iSelectedIndex--; }        
+            memmove( ptOrder+iIndex , ptOrder+iIndex+1 , sizeof(*ptOrder)*(iObjCount-iIndex) );
         }
         
         if (iIndex == iStartIdx) { iStartIdx++; }
         if (iIndex == iEndIdx) { iEndIdx--; }
+        if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
+        if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
+        if (iStartIdx < 0) { iStartIdx = 0; }        
         
-        /*todo: need to shrink at some point, but can't shrink if there's holes
-            would require to shrink the arrays independently? (so storage is kept, but index is resized)
-            would need to fill the holes of storage from the end? (also require tracking sizes independently)
-            filling the holes could mean sorting the storage? (slower) or just adjust all slots that changed
-                todo that need to either keep a reverse index, do a slow index lookup, or create a temporary reverse index?
-        */
-                
+        if ( iSelectedIndex == iIndex ) {            
+            if ( (iSelectedIndex > 0) ) { iSelectedIndex--; }        
+            if ( !iObjCount ) { iSelectedIndex = -1; }
+            if (iSelectedIndex >= 0) {
+                _with( aObject(iSelectedIndex) ) {
+                    if ( (w->iY-iViewY) < 0 || (w->iY+w->iH-iViewY) > iBufHei ) {
+                        //printf("New auto select: %i -> %i,%i\n" ,  iSelectedIndex , w->iX , w->iY);
+                        SendMessage( hwnd , WM_VSCROLL , SB_THUMBTRACK , w->iY-(iBufHei/2) );
+                    }
+                    if ( (w->iX-iViewX) < 0 || (w->iX+w->iW-iViewX) > iBufWid ) {
+                        SendMessage( hwnd , WM_HSCROLL , SB_THUMBTRACK , w->iX-(iBufWid/2) );
+                    }
+                } _endwith;
+            } //endif   
+        } //endif
+        
+        //shrink if too much space left in order buffer...
+        if ( iObjCount <= ((iObjMaxCount-_MaxGap)-((_MaxGap)/2)) ) {
+            iObjMaxCount -= _MaxGap;
+            ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
+            printf("Reallocate (srhink) to %i objects\n",iObjMaxCount);
+            //todo: check for faillure
+        }
+        
         //if deleted piece was on the workarea limit, recalculate the limit.
         if ( (iXX == iMaxX) || (iYY == iMaxY) ) { iMaxXIdx = -1 ; ScrollUpdate( hwnd , -1 , - 1 ); }
         
@@ -260,7 +255,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     switch (message) {
         case WM_ERASEBKGND: { return 1; }
         case WM_SETCURSOR: {
-            
+                                    
             //if dragging show moving cursor
             if (bDragging==2) {
                 SetCursor( LoadCursor( NULL , IDC_SIZEALL ) );
@@ -269,7 +264,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //if not check if hovering over a visible object            
             const POINT pt = { iMouseX , iMouseY };
             static int iLastIndex = -1;
-            if (iLastIndex > iStartIdx) { 
+            
+            if ((!ptOrder) || ( !iObjCount )) { iLastIndex = -1 ; break; }
+            if (iLastIndex >= iObjCount) { iLastIndex = -1; }
+            
+            if ((iLastIndex >= iStartIdx) && (iLastIndex <= iEndIdx)) { 
                 _with( aObject(iLastIndex) ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                                        
                     if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; return 0; }
@@ -303,13 +302,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                             if (iSelectedIndex < (iObjCount-1)) {
                                 const int iNextY = aObject(iSelectedIndex+1).iY;
                                 if ( (iNewY > iNextY) || ((iNewY==iNextY) && (iNewX > aObject(iSelectedIndex+1).iX)) ) {
-                                    SWAP( piOrder[iSelectedIndex] , piOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
+                                    SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
                                 } //endif
                             } //endif
                             if (iSelectedIndex > 0) {
                                 const int iPrevY = aObject(iSelectedIndex-1).iY;
                                 if ( (iNewY < iPrevY) || ((iNewY==iPrevY) && (iNewX < aObject(iSelectedIndex-1).iX)) ) {
-                                    SWAP( piOrder[iSelectedIndex] , piOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
+                                    SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
                                 } //endif
                             } //endif (iSelectedIndex > 0) {
                             break;
@@ -373,6 +372,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (!GetScrollInfo( hwnd , SB_ , &tInfo )) {
                 puts("Failed to get diagram scroll info");
             }
+            if (lParam) {
+                if (lParam < tInfo.nMin) { lParam = tInfo.nMin; }
+                if (lParam > tInfo.nMax) { lParam = tInfo.nMax; }
+                tInfo.nTrackPos = lParam;
+            }
+                
             int bFast=1, nPos = tInfo.nPos;
             switch (nScrollCode) {
                 case SB_TOP:           { tInfo.nPos = tInfo.nMin; break; }
@@ -386,6 +391,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 case SB_THUMBTRACK:    { bFast=0; tInfo.nPos = tInfo.nTrackPos; break; }                
             }
             
+            //printf("{%i}\n",tInfo.nPos);
             tInfo.fMask = SIF_POS;
             if (!SetScrollInfo( hwnd , SB_ , &tInfo , true ) && tInfo.nPos) {
                 printf("Failed to set diagram scroll info: %i->%i\n",nPos,tInfo.nPos);
@@ -455,17 +461,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 hbObject[N] = CreateSolidBrush( cObject[N] );
             }
             
-            ptObjects = malloc(iObjMaxCount*sizeof(DiagramObjectStruct));
-            piOrder = malloc(iObjMaxCount*sizeof(*piOrder));
-            piFreeSlot = malloc(_MaxGap*sizeof(*piFreeSlot));
+            ptOrder = malloc(iObjMaxCount*sizeof(*ptOrder));
             
             // generate semi-random objects for initial tests
             int iPosY=0, iPosX=0, iBigRow ; iObjCount = 32;
             for (int N=0 ; N < iObjCount ; N++ ) {
-                piOrder[N] = N;
+                ptOrder[N] = malloc(sizeof(**ptOrder));
                 if (!iPosX) { iPosX = (rand() % 256) & (~7); iBigRow = 0; }
-                _with( ptObjects[N] ) {
-                    //w->iIndex = N;
+                _with( aObject(N) ) {                    
                     w->iX = iPosX;
                     w->iW = (48+(rand() % 120)) & (~7);
                     w->iY = iPosY; 
@@ -473,12 +476,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     w->bColor = rand() % 6;
                     sprintf(w->zCaption , "Obj%i", N+1 );                    
                     if (w->iH > iBigRow) { iBigRow = w->iH; }                    
-                    if ((rand() & 1) || iPosX > 256) { iPosY += (iBigRow+8); iPosX = 0; } else { iPosX += (w->iW+8); }
-                    
+                    if ((rand() & 1) || iPosX > 256) { iPosY += (iBigRow+8); iPosX = 0; } else { iPosX += (w->iW+8); }                    
                 } _endwith;
             }
-            iObjTotal = iObjCount;
-            
+            iObjTotal = iObjCount;            
             
             return 1;
         }
@@ -515,11 +516,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             SetFocus(hwnd);
             int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
             //printf("%i to %i\n",iStartIdx,iEndIdx);
-            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
+            for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
                 _with( aObject(iIndex) ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                    
                     const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) };                    
-                    if (PtInRect( &tRc , pt )) { iSelectedIndex = iIndex ; break ; }
+                    if (PtInRect( &tRc , pt )) { 
+                        printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
+                        iSelectedIndex = iIndex ; break ; 
+                    }
                 } _endwith;
             }
             if (iOldSel != iSelectedIndex) { SetUpdate(); }
