@@ -1,10 +1,38 @@
 typedef struct {
-    int32_t iY;    
-    int16_t iX;
-    uint8_t iW,iH;
-    char zCaption[15];
-    uint8_t bColor;
+    int32_t  iY;    
+    int16_t  iX;
+    uint8_t  iW,iH;
+    uint16_t iType;
+    uint8_t bFlags, bClass;    
+    char zName[19], zZero;
+    void* Content[0];
+    //type specific data follows...
 } DiagramObjectStruct;
+
+typedef enum {
+    ocInvalid,    //
+    ocTextData,   //
+    ocNumberData, //
+    ocStructData, //
+    ocFilter,     //
+    ocFunction,   //    
+    ocDevice,     //
+} ObjectClass;
+
+typedef enum {
+    otInvalid,   //
+    otString,    //    
+    otCout,
+} ObjectType;
+
+typedef struct {
+    int32_t iLength,iBuffer;
+    char zContent[0];
+} StringObject;
+
+typedef struct {
+    HANDLE hConsole;
+} DeviceObject;
 
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
     
@@ -19,19 +47,27 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         dmtRedraw = 1,
     } DiagramTimers;
     
+    //////////////////////////////// Per Object Type Information ///////////////////////////////////
+    typedef struct {         
+        LRESULT (*pfHandlerProc)( void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam );
+        char*    pzName;
+        COLORREF uColor;    
+    } ObjectTypeInfo;    
+    ////////////////////////////////////////////////////////////////////////////////////////////////
+    
     static HBITMAP hBmBuffer;
-    static HFONT hCtlFont;
+    static HFONT hCtlFont,hSmallFont,hSmallFontB;
     static HDC hDcBuffer;
     static int iBufWid,iBufHei;
     static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;       
-    _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;
-    static const int32_t cObject[] = { 0xFF8844 , 0xFF4488 , 0x44FF88 , 0x4488FF , 0x8844FF , 0x88FF44 , -1 };
+    _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;    
     static HBRUSH hbBack , hbBackGrid , hbObject[256] = {0} ;
     static HPEN hpSelected;
     
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
     #define aObject(_I) (*ptOrder[_I])
+    #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]+1)))
     _const _MaxGap = 128;
     
     static int iObjCount=0, iObjMaxCount=_MaxGap; //object counting / limit
@@ -47,6 +83,31 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
         
     static DiagramObjectStruct** ptOrder = NULL;
+    
+    // ----------- Per Object functions ------------
+    #define _ObjectPrototype void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam
+    LRESULT fnObjStringHandler( _ObjectPrototype ) { 
+        HDC hdc = hDcBuffer;
+        SelectObject( hdc , hCtlFont );
+        _with( *(StringObject*)pObject ) {
+            DrawText( hdc , w->zContent , w->iLength , pRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
+        } _endwith;
+    }
+    LRESULT fnObjStdoutHandler( _ObjectPrototype ) {
+        return 0; 
+    }
+    #undef _ObjectPrototype
+        
+    #define ForEachObjectType( _Do ) \
+        _Do( NULL                , "Invalid"         , 0xFF00FF ) \
+        _Do( &fnObjStringHandler , "String"          , 0xFF8844 ) \
+        _Do( &fnObjStdoutHandler , "Standard Output" , 0x55FF55 )
+        
+    #define _DeclAsArray( _pFN , _Name , _Color ) { NULL , _Name , _Color },
+    static ObjectTypeInfo g_ObjectTypeInfo[] = {
+            ForEachObjectType( _DeclAsArray )
+    };
+    #undef DeclAsArray
             
     // ------------- Diagram functions -------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -118,12 +179,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //skip object if outside horizontal range
                 if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }                    
                 //render object
-                SelectObject( hdc , hbObject[ w->bColor ] );
+                SelectObject( hdc , hbObject[ w->iType ] );
                 RECT tObjRc = {iPosX,iPosY,iPosX+w->iW,iPosY+w->iH};
-                RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );                
-                if (w->zCaption) {
-                    DrawText( hdc , w->zCaption , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
-                }
+                RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
                 
                 if (iIndex == iSelectedIndex) { 
                     _const hOldPen = SelectObject( hdc , hpSelected );
@@ -132,9 +190,24 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     SelectObject( hdc , hOldPen ); SelectObject( hdc , hOldBrush );
                 }                        
                 
+                int iBorderUD = (tObjRc.bottom-tObjRc.top)/4;
+                tObjRc.bottom -= 4;
+                SelectObject( hDcBuffer , hSmallFont );
+                DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
+                SelectObject( hDcBuffer , hSmallFontB );
+                DrawText( hdc , g_ObjectTypeInfo[w->iType].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
+                
+                //tell object to draw itself
+                tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);                
+                g_ObjectTypeInfo[w->iType].pfHandlerProc( w->Content , &tObjRc , WM_PAINT , 0 , 0 );
+                
                 if (iIndex < (iObjCount-1)) {
+                    int iPosXX, iPosYY;
                     iPosX += w->iW/2; iPosY += w->iH;
-                    MoveToEx( hdc , iPosX , iPosY , NULL ); LineTo( hdc , iPosX , iPosY+24 );
+                     _with( aObject(iIndex+1) ) {
+                         iPosXX = w->iX+w->iW/2; iPosYY = w->iY;
+                     } _endwith;
+                    MoveToEx( hdc , iPosX , iPosY , NULL ); LineTo( hdc , iPosXX , iPosYY );
                 }
                 
                 
@@ -181,8 +254,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             w->iW = (48+(rand() % 120)) & (~7);
             w->iY = iPosY; 
             w->iH = (32+(rand() % 64)) & (~7);
-            w->bColor = rand() % 6;
-            sprintf(w->zCaption , "Obj%i", iObjTotal+1 );            
+            //w->bColor = rand() % 6;
+            //sprintf(w->zName , "Obj%i", iObjTotal+1 );            
             if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
@@ -449,43 +522,70 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return 0;
         }
         case WM_CREATE: {          //Initialize control
+        
+            #define _SetHandler( _pFN , _Name , _Color )  g_ObjectTypeInfo[ iIdx++ ].pfHandlerProc = _pFN;
+            int iIdx=0;
+            ForEachObjectType( _SetHandler );
+            #undef _SetHandler
             
+            hSmallFont = GetStockObject( SYSTEM_FONT );
             hbBack = CreateSolidBrush( cBack );            
             hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
             hpSelected = CreatePen( PS_SOLID , 4 , cSelected );
             PostMessage( hwnd , WM_HSCROLL , 0,0 );
             PostMessage( hwnd , WM_VSCROLL , 0,0 );
 
-            for (int N=0 ; N < 256 ; N++) { //initialize brushes for object palette theme
-                if (cObject[N] < 0) { break; }
-                hbObject[N] = CreateSolidBrush( cObject[N] );
+            for (int N=0 ; N < _countof(g_ObjectTypeInfo) ; N++) { //initialize brushes for object palette theme                
+                hbObject[N] = CreateSolidBrush( g_ObjectTypeInfo[N].uColor );
             }
             
             ptOrder = malloc(iObjMaxCount*sizeof(*ptOrder));
             
             // generate semi-random objects for initial tests
-            int iPosY=0, iPosX=0, iBigRow ; iObjCount = 32;
-            for (int N=0 ; N < iObjCount ; N++ ) {
-                ptOrder[N] = malloc(sizeof(**ptOrder));
-                if (!iPosX) { iPosX = (rand() % 256) & (~7); iBigRow = 0; }
-                _with( aObject(N) ) {                    
-                    w->iX = iPosX;
-                    w->iW = (48+(rand() % 120)) & (~7);
-                    w->iY = iPosY; 
-                    w->iH = (32+(rand() % 64)) & (~7);
-                    w->bColor = rand() % 6;
-                    sprintf(w->zCaption , "Obj%i", N+1 );                    
-                    if (w->iH > iBigRow) { iBigRow = w->iH; }                    
-                    if ((rand() & 1) || iPosX > 256) { iPosY += (iBigRow+8); iPosX = 0; } else { iPosX += (w->iW+8); }                    
+            int iPosY=0, iPosX=0 ; iObjCount = 0;
+            { //sample string
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(StringObject)+12);                
+                _with( aObject(iObjCount) ) {
+                    w->iX = 10          ; w->iW = 128;
+                    w->iY = iPosY       ; w->iH = 48;
+                    w->iType = otString ; w->bClass = ocTextData;
+                    strcpy( w->zName , "MyString" );                    
+                    iPosY += w->iH+8;
                 } _endwith;
+                _with( aObject_Content(iObjCount,StringObject) ) {
+                    w->iLength = 11; w->iBuffer = 12;
+                    strcpy( w->zContent , "Hello World" );
+                } _endwith;                
+                iObjCount++;
             }
+            { //sample device
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(DeviceObject));                
+                _with( aObject(iObjCount) ) {
+                    w->iX = 10          ; w->iW = 128;
+                    w->iY = iPosY       ; w->iH = 48;
+                    w->iType = otCout   ; w->bClass = ocDevice;
+                    strcpy( w->zName , "STDOUT" );                    
+                    iPosY += w->iH+8;                                        
+                } _endwith;
+                _with( aObject_Content(iObjCount,DeviceObject) ) {                    
+                } _endwith;
+                iObjCount++;
+            }
+            
             iObjTotal = iObjCount;            
             
             return 1;
         }
         case WM_SETFONT: {         //Set New Font
-            hCtlFont = (HFONT)wParam; SetUpdate();
-            SelectObject( hDcBuffer , hCtlFont );
+            if (hSmallFont) { DeleteObject( hSmallFont ); DeleteObject( hSmallFontB ); hSmallFont = hSmallFontB = NULL; }            
+            hCtlFont = (HFONT)wParam; SetUpdate();                        
+            //SelectObject( hDcBuffer , hCtlFont );
+            LOGFONT tFont; GetObject( hCtlFont , sizeof(tFont) , &tFont );
+            tFont.lfHeight = (tFont.lfHeight*2)/3;
+            tFont.lfWidth  = (tFont.lfWidth *2)/3;            
+            hSmallFont = CreateFontIndirect( &tFont );
+            tFont.lfWeight = FW_BOLD;
+            hSmallFontB = CreateFontIndirect( &tFont );
         }
         case WM_GETFONT: {         //Retrieve Current Font
             return (LRESULT)hCtlFont;
