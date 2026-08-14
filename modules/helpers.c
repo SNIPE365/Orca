@@ -6,35 +6,35 @@ static void defines () { //defines
     #define _auto __auto_type
     #define _const const __auto_type
     #define _with(_var) { _const w = &_var;
-    #define _endwith }    
+    #define _endwith }
 
-    #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)    
+    #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)
         #define _constexpr( _parms... ) constexpr __auto_type _parms
     #else
         #define _constexpr( _parms... ) enum { _parms }
     #endif
     //_constexpr( test = 100 ); _constexpr( test2 = 110 );
-    
+
     //#define _countof( _var ) (sizeof((*_var))/sizeof(typeof(*(_var)))
-    
+
     #define SWAP(_a, _b) do { \
         typeof(_a) _temp = (_a); \
         (_a) = (_b); \
         (_b) = _temp; \
     } while(0)
-    
+
 }
 
 // get size of a file without opening it.
 uint64_t GetFileSize64(const char* filePath) {
-    WIN32_FILE_ATTRIBUTE_DATA fileInfo;    
+    WIN32_FILE_ATTRIBUTE_DATA fileInfo;
     // GetFileExInfoStandard is the standard level of information
-    if (GetFileAttributesExA(filePath, GetFileExInfoStandard, &fileInfo)) {        
+    if (GetFileAttributesExA(filePath, GetFileExInfoStandard, &fileInfo)) {
         ULARGE_INTEGER size;
         size.HighPart = fileInfo.nFileSizeHigh;
-        size.LowPart  = fileInfo.nFileSizeLow;        
+        size.LowPart  = fileInfo.nFileSizeLow;
         return size.QuadPart;
-    }    
+    }
     return (uint64_t)-1; // File not found or access denied
 }
 
@@ -42,7 +42,7 @@ uint64_t GetFileSize64(const char* filePath) {
 // timeout_ms: Maximum time to wait in milliseconds. Use 0 for infinite wait.
 // Returns the length of the string, or -1 on failure.
 int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piReturnCode , const int iTimeout_ms ) {
-    
+
     if (piReturnCode) { *piReturnCode = 0; }
     if (!pzCommand || !ppzOut_buffer) { return -1; }
     *ppzOut_buffer = NULL;
@@ -87,18 +87,18 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
 
     // 3. Create the child process
     BOOL bSuccess = CreateProcessA(
-        NULL, 
-        cmd_mutable,       // Mutable command line 
-        NULL,              // Process security attributes 
-        NULL,              // Primary thread security attributes 
-        TRUE,              // Handles are inherited 
+        NULL,
+        cmd_mutable,       // Mutable command line
+        NULL,              // Process security attributes
+        NULL,              // Primary thread security attributes
+        TRUE,              // Handles are inherited
         CREATE_NO_WINDOW,  // Creation flags (prevents console from appearing)
-        NULL,              // Use parent's environment 
-        NULL,              // Use parent's current directory 
-        &si,               // STARTUPINFO pointer 
-        &pi                // Receives PROCESS_INFORMATION 
+        NULL,              // Use parent's environment
+        NULL,              // Use parent's current directory
+        &si,               // STARTUPINFO pointer
+        &pi                // Receives PROCESS_INFORMATION
     );
-    
+
     free(cmd_mutable);
 
     if (!bSuccess) {
@@ -133,19 +133,19 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
         }
 
         DWORD bytesAvailable = 0;
-        
+
         // PeekNamedPipe checks if there is data without blocking execution
         BOOL bPeek = PeekNamedPipe(hReadPipe, NULL, 0, NULL, &bytesAvailable, NULL);
-        
+
         if (bPeek && bytesAvailable > 0) {
             // Ensure we have enough space for the available bytes + null terminator
             if (length + bytesAvailable >= capacity - 1) {
-                capacity = capacity + bytesAvailable + 4096; 
+                capacity = capacity + bytesAvailable + 4096;
                 char* new_buf = (char*)realloc(buffer, capacity);
                 if (!new_buf) break; // Memory error, stop reading
                 buffer = new_buf;
             }
-            
+
             DWORD bytesRead = 0;
             if (ReadFile(hReadPipe, buffer + length, bytesAvailable, &bytesRead, NULL)) {
                 length += bytesRead; if (iTimeout_ms>0) { startTime = GetTickCount(); }
@@ -158,7 +158,7 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
                 // Process is dead and there is no more data in the pipe.
                 break;
             }
-            
+
             // Sleep briefly to yield CPU thread time while waiting for child to output
             Sleep(10);
         }
@@ -167,8 +167,8 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
     // 5. Cleanup and return
     buffer[length] = '\0';
     *ppzOut_buffer = buffer;
-    
-    if (piReturnCode) GetExitCodeProcess( pi.hProcess , piReturnCode );    
+
+    if (piReturnCode) GetExitCodeProcess( pi.hProcess , piReturnCode );
 
     CloseHandle(pi.hProcess);
     CloseHandle(pi.hThread);
