@@ -1,78 +1,44 @@
 typedef struct {
-    int32_t  iY;    
-    int16_t  iX;
-    uint8_t  iW,iH;
-    uint16_t iType;
-    uint8_t bFlags, bClass;    
-    char zName[19], zZero;
-    void* Content[0];
-    //type specific data follows...
+    int32_t  iY;                //+ 4= 4 // Y position of the object
+    int16_t  iX;                //+ 2= 6 // X position of the object
+    uint8_t  iW,iH;             //+ 2= 8 // Width and height of the object
+    uint16_t iClassID;          //+ 2=10 // ObjectClassID of the object
+    uint8_t bFlags, bResv;      //+ 2=12 // Flags and reserved byte of the object
+    char zName[19], zZero;      //+20=32 // Name (user) of the object and zero terminator
+    char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
 
-typedef enum {
-    ocInvalid,    //
-    ocTextData,   //
-    ocNumberData, //
-    ocStructData, //
-    ocFilter,     //
-    ocFunction,   //    
-    ocDevice,     //
-} ObjectClass;
-
-typedef enum {
-    otInvalid,   //
-    otString,    //    
-    otCout,
-} ObjectType;
-
-typedef struct {
-    int32_t iLength,iBuffer;
-    char zContent[0];
-} StringObject;
-
-typedef struct {
-    HANDLE hConsole;
-} DeviceObject;
-
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
-    
+
     typedef enum {
         DIM_BASE = WM_USER,
         DIM_INSERT,
         DIM_REMOVE,
         /* PRIVATE ONES */
-        DIM_CREATE_BUFFER,    
+        DIM_CREATE_BUFFER,
     } DiagramEnum;
     typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
-    
-    //////////////////////////////// Per Object Type Information ///////////////////////////////////
-    typedef struct {         
-        LRESULT (*pfHandlerProc)( void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam );
-        char*    pzName;
-        COLORREF uColor;    
-    } ObjectTypeInfo;    
-    ////////////////////////////////////////////////////////////////////////////////////////////////
-    
+
     static HBITMAP hBmBuffer;
     static HFONT hCtlFont,hSmallFont,hSmallFontB;
     static HDC hDcBuffer;
     static int iBufWid,iBufHei;
-    static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;       
-    _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;    
+    static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;
+    _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;
     static HBRUSH hbBack , hbBackGrid , hbObject[256] = {0} ;
     static HPEN hpSelected;
-    
+
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
     #define aObject(_I) (*ptOrder[_I])
-    #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]+1)))
+    #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]->Content)))
     _const _MaxGap = 128;
-    
+
     static int iObjCount=0, iObjMaxCount=_MaxGap; //object counting / limit
     static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
-    static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object    
+    static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object
     static int iViewX=0, iViewY=0;                //scrolling offset
     static int iMaxXIdx=-1 , iMaxYIdx=-1;         //indexes for the objects that have the maximum position (cache)
     static int iStartIdx=0, iEndIdx=-1;           //start/end indexes for drawn objects (cache)
@@ -81,34 +47,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
     static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
     static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
-        
+
     static DiagramObjectStruct** ptOrder = NULL;
-    
-    // ----------- Per Object functions ------------
-    #define _ObjectPrototype void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam
-    LRESULT fnObjStringHandler( _ObjectPrototype ) { 
-        HDC hdc = hDcBuffer;
-        SelectObject( hdc , hCtlFont );
-        _with( *(StringObject*)pObject ) {
-            DrawText( hdc , w->zContent , w->iLength , pRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
-        } _endwith;
-    }
-    LRESULT fnObjStdoutHandler( _ObjectPrototype ) {
-        return 0; 
-    }
-    #undef _ObjectPrototype
-        
-    #define ForEachObjectType( _Do ) \
-        _Do( NULL                , "Invalid"         , 0xFF00FF ) \
-        _Do( &fnObjStringHandler , "String"          , 0xFF8844 ) \
-        _Do( &fnObjStdoutHandler , "Standard Output" , 0x55FF55 )
-        
-    #define _DeclAsArray( _pFN , _Name , _Color ) { NULL , _Name , _Color },
-    static ObjectTypeInfo g_ObjectTypeInfo[] = {
-            ForEachObjectType( _DeclAsArray )
-    };
-    #undef DeclAsArray
-            
+
+    #include "../components/_basedecl.h"
+
     // ------------- Diagram functions -------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
         //if client are is not given... calculate
@@ -120,110 +63,121 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (iMaxXIdx < 0) {
             iMaxX = iMaxY = -1;
             for (int i=0 ; i < iObjCount ; i++ ) {
-                _with( aObject(i) ) {                    
+                _with( aObject(i) ) {
                     if ((w->iX+w->iW) > iMaxX) { iMaxX = (w->iX+w->iW); iMaxXIdx=i; }
                     if ((w->iY+w->iH) > iMaxY) { iMaxY = (w->iY+w->iH); iMaxYIdx=i; }
                 } _endwith;
             }
         }
-        
+
         //update scrollbar max sizes , page , range
         SCROLLINFO tInfoH = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nWid , .nMin = 0 , .nMax = (iMaxX >= nWid) ? iMaxX+nWid/2 : iMaxX };
-        SetScrollInfo( hwnd , SB_HORZ , &tInfoH , true );            
+        SetScrollInfo( hwnd , SB_HORZ , &tInfoH , true );
         SCROLLINFO tInfoV = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_PAGE | SIF_RANGE | SIF_DISABLENOSCROLL , .nPage = nHei , .nMin = 0 , .nMax = (iMaxY >= nHei) ? iMaxY+nHei/2 : iMaxY };
         SetScrollInfo( hwnd , SB_VERT , &tInfoV , true );
         bUpdateScroll = 1;
     }
     void WindowDraw(void) {
-        
+
         //check if there's previous items that are visible (caused by moving or scroll up)
-        if (bDrawn==1) { return; }                                         
-        
+        if (bDrawn==1) { return; }
+
         HDC hdc = hDcBuffer;
         RECT tRc = {0,0,iBufWid,iBufHei};
-                    
-        iViewX = GetScrollPos( hwnd , SB_HORZ );            
+
+        iViewX = GetScrollPos( hwnd , SB_HORZ );
         int iTempViewY = GetScrollPos( hwnd , SB_VERT );
         iViewY = (iViewY*3+iTempViewY+2)/4;
         if ((abs(iViewY-iTempViewY) > iBufHei)) { iViewY = (iViewY+iTempViewY+1)/2; }
         if (iTempViewY < iViewY) { iViewY--; }
         if (iTempViewY > iViewY) { iViewY++; }
-        
+
         SetBrushOrgEx( hdc , 1 , 4-(iViewY & 7) , NULL );
         SetBrushOrgEx( hdc , 4 , 4-(iViewY & 7) , NULL );
         FillRect( hdc , &tRc , hbBackGrid );
         SetBkMode( hdc , TRANSPARENT );
         if (GetFocus()==hwnd) { DrawFocusRect( hdc , &tRc ); }
-        
+
         if (!ptOrder) { return; }
         //puts("drawing start");
-        
+
         if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
         if (iStartIdx < 0) { iStartIdx = 0; }
         if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
-        
+
         for ( ; iStartIdx>0 ; iStartIdx-- ) {
             _with( aObject(iStartIdx-1) ) {
                 if ((w->iY+w->iH-iViewY) < 0) { break; }
             } _endwith;
         }
-        
+
         int iIndex;
         for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
             _with( aObject(iIndex) ) {
                 //check/skip if item is invisible (caused by moving or scroll down)
-                if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }                    
+                if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }
                 //clculate position Y and see if it's after the visible area (early stop)
                 int iPosY = w->iY-iViewY, iPosX = w->iX-iViewX;
                 if (iPosY >= iBufHei) { break; }
                 //skip object if outside horizontal range
-                if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }                    
+                if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }
+
+                //draw connection
+                if (iIndex < (iObjCount-1)) {
+                    int iXX, iYY;
+                    const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH);
+                    _with( aObject(iIndex+1) ) {
+                        iXX = w->iX+w->iW/2; iYY = w->iY;
+                    } _endwith;
+                    for (int iN=0; iN<3; iN++) {
+                        const int iOX = (iN & 1), iOY = (iN/2);
+                        const POINT atBezier[] = {
+                            {iOX+iX         , iOY+iY} ,
+                            {iOX+iX         , iOY+iYY} ,
+                            {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
+                            {iOX+iXX        , iOY+iYY}
+                        };
+                        PolyBezier( hdc , atBezier , 4 );
+                     }
+                    //MoveToEx( hdc , iPosX , iPosY , NULL ); LineTo( hdc , iPosXX , iPosYY );
+                }
+
                 //render object
-                SelectObject( hdc , hbObject[ w->iType ] );
+                SelectObject( hdc , hbObject[ w->iClassID ] );
                 RECT tObjRc = {iPosX,iPosY,iPosX+w->iW,iPosY+w->iH};
                 RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
-                
-                if (iIndex == iSelectedIndex) { 
+
+                //border if selected (single select)
+                if (iIndex == iSelectedIndex) {
                     _const hOldPen = SelectObject( hdc , hpSelected );
-                    _const hOldBrush = SelectObject( hdc , GetStockObject( NULL_BRUSH ) ); 
+                    _const hOldBrush = SelectObject( hdc , GetStockObject( NULL_BRUSH ) );
                     RoundRect( hdc , tObjRc.left-0 , tObjRc.top-0 , tObjRc.right+0 , tObjRc.bottom+0 , 16 , 16 );
                     SelectObject( hdc , hOldPen ); SelectObject( hdc , hOldBrush );
-                }                        
-                
+                }
+
                 int iBorderUD = (tObjRc.bottom-tObjRc.top)/4;
                 tObjRc.bottom -= 4;
                 SelectObject( hDcBuffer , hSmallFont );
-                DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
+                DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
                 SelectObject( hDcBuffer , hSmallFontB );
-                DrawText( hdc , g_ObjectTypeInfo[w->iType].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
-                
+                DrawText( hdc , g_ClassInterface[w->iClassID].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
+
                 //tell object to draw itself
-                tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);                
-                g_ObjectTypeInfo[w->iType].pfHandlerProc( w->Content , &tObjRc , WM_PAINT , 0 , 0 );
-                
-                if (iIndex < (iObjCount-1)) {
-                    int iPosXX, iPosYY;
-                    iPosX += w->iW/2; iPosY += w->iH;
-                     _with( aObject(iIndex+1) ) {
-                         iPosXX = w->iX+w->iW/2; iPosYY = w->iY;
-                     } _endwith;
-                    MoveToEx( hdc , iPosX , iPosY , NULL ); LineTo( hdc , iPosXX , iPosYY );
-                }
-                
-                
-                
+                tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
+                g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , &tObjRc , WM_PAINT , 0 , 0 );
+
             } _endwith;
         }
-        
-        iEndIdx=(iIndex < iObjCount ? iIndex-1 : iObjCount-1); 
+
+        iEndIdx=(iIndex < iObjCount ? iIndex-1 : iObjCount-1);
         //puts("drawing end");
-        
+
         bDrawn = 2;
         if (iViewY == iTempViewY) { bDrawn = 1; if (wParam) { KillTimer(hwnd,wParam); } }
         InvalidateRect( hwnd , NULL , true ); //UpdateWindow( hwnd );
         return;
     }; //void DrawWindow(void)
-    int InsertObject( int iPosX , int iPosY ) {        
+    int InsertObject( int iPosX , int iPosY ) {
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
             iObjMaxCount += _MaxGap;
@@ -231,13 +185,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             printf("Reallocate (expand) to %i objects\n",iObjMaxCount);
             //todo: check for faillure
         }
-        
+
         //put the index last in the list and then...
         //bubble it up till the right order (insertion sort)
         //since the list is sorted technically i could use binary search
         //to locate the position, but a "memmove" would still be required
         //to insert into the position, since this is not a linked list
-        //and if this was a linked list then i could put the index into the 
+        //and if this was a linked list then i could put the index into the
         //data itself, but it would need to be a double linked list. or a slow check
         int iNew;
         for (iNew = iObjCount ; iNew > 0 ; iNew--) {
@@ -245,17 +199,17 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
               if ((w->iY) < iPosY) { break; }
               ptOrder[iNew] = ptOrder[iNew-1];
             } _endwith;
-        }   
-                        
+        }
+
         //initialize new slot
         ptOrder[iNew] = malloc( sizeof(**ptOrder) );
-        _with( aObject(iNew) ) {            
+        _with( aObject(iNew) ) {
             w->iX = iPosX;
             w->iW = (48+(rand() % 120)) & (~7);
-            w->iY = iPosY; 
+            w->iY = iPosY;
             w->iH = (32+(rand() % 64)) & (~7);
             //w->bColor = rand() % 6;
-            //sprintf(w->zName , "Obj%i", iObjTotal+1 );            
+            //sprintf(w->zName , "Obj%i", iObjTotal+1 );
             if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
@@ -265,36 +219,36 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return iNew;
     }
     int RemoveObject( int iIndex ) {
-        
+
         //don't remove if object is being dragged
-        if ( iSelectedIndex == iIndex && bDragging ) { 
+        if ( iSelectedIndex == iIndex && bDragging ) {
             bDragging = 1 ; SendMessage( hwnd , WM_LBUTTONUP , 0 , 0 );
-        }        
-        
+        }
+
         //grab end of X,Y to check if it was at limit of view area
-        int iXX,iYY;         
-        _with( aObject(iIndex) ) {            
+        int iXX,iYY;
+        _with( aObject(iIndex) ) {
             iXX = w->iX + w->iW;
             iYY = w->iY + w->iH;
             w->iW = 0;
         } _endwith;
 
         free( ptOrder[iIndex] ); ptOrder[iIndex] = 0;
-                
+
         //removing last is simple but otherwise we need to close the gap
         iObjCount--;
         if (iIndex != iObjCount) {
             memmove( ptOrder+iIndex , ptOrder+iIndex+1 , sizeof(*ptOrder)*(iObjCount-iIndex) );
         }
-        
+
         if (iIndex == iStartIdx) { iStartIdx++; }
         if (iIndex == iEndIdx) { iEndIdx--; }
         if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
         if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
-        if (iStartIdx < 0) { iStartIdx = 0; }        
-        
-        if ( iSelectedIndex == iIndex ) {            
-            if ( (iSelectedIndex > 0) ) { iSelectedIndex--; }        
+        if (iStartIdx < 0) { iStartIdx = 0; }
+
+        if ( iSelectedIndex == iIndex ) {
+            if ( (iSelectedIndex > 0) ) { iSelectedIndex--; }
             if ( !iObjCount ) { iSelectedIndex = -1; }
             if (iSelectedIndex >= 0) {
                 _with( aObject(iSelectedIndex) ) {
@@ -306,9 +260,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         SendMessage( hwnd , WM_HSCROLL , SB_THUMBTRACK , w->iX-(iBufWid/2) );
                     }
                 } _endwith;
-            } //endif   
+            } //endif
         } //endif
-        
+
         //shrink if too much space left in order buffer...
         if ( iObjCount <= ((iObjMaxCount-_MaxGap)-((_MaxGap)/2)) ) {
             iObjMaxCount -= _MaxGap;
@@ -316,52 +270,52 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             printf("Reallocate (srhink) to %i objects\n",iObjMaxCount);
             //todo: check for faillure
         }
-        
+
         //if deleted piece was on the workarea limit, recalculate the limit.
         if ( (iXX == iMaxX) || (iYY == iMaxY) ) { iMaxXIdx = -1 ; ScrollUpdate( hwnd , -1 , - 1 ); }
-        
+
         SetUpdate();
-        return 1;        
+        return 1;
     }
-    
+
     // ------------- Message dispatch --------------
     switch (message) {
         case WM_ERASEBKGND: { return 1; }
         case WM_SETCURSOR: {
-                                    
+
             //if dragging show moving cursor
             if (bDragging==2) {
                 SetCursor( LoadCursor( NULL , IDC_SIZEALL ) );
                 return 0;
             }
-            //if not check if hovering over a visible object            
+            //if not check if hovering over a visible object
             const POINT pt = { iMouseX , iMouseY };
             static int iLastIndex = -1;
-            
+
             if ((!ptOrder) || ( !iObjCount )) { iLastIndex = -1 ; break; }
             if (iLastIndex >= iObjCount) { iLastIndex = -1; }
-            
-            if ((iLastIndex >= iStartIdx) && (iLastIndex <= iEndIdx)) { 
+
+            if ((iLastIndex >= iStartIdx) && (iLastIndex <= iEndIdx)) {
                 _with( aObject(iLastIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                                        
+                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
                     if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; return 0; }
                 } _endwith;
             }
-            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {                
+            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
                 _with( aObject(iIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                                        
+                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
                     if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; iLastIndex=iIndex ; return 0; }
                 } _endwith;
-            }       
+            }
             //otherwise DefWindowProc will set default cursor
             break;
         }
         case WM_MOUSEMOVE: {       //Mouse moved in the control
-            iMouseX = (short)LOWORD(lParam);  // horizontal position of cursor 
+            iMouseX = (short)LOWORD(lParam);  // horizontal position of cursor
             iMouseY = (short)HIWORD(lParam);  // vertical position of cursor
             //check if moved enough to start a drag, to active it and backup initial position
             if ((bDragging==1) && ((abs(iMouseX-iDragStartX)>3) || (abs(iMouseY-iDragStartY)>3))) {
-                iDragCancelX = aObject(iSelectedIndex).iX; iDragCancelY = aObject(iSelectedIndex).iY; bDragging = 2; 
+                iDragCancelX = aObject(iSelectedIndex).iX; iDragCancelY = aObject(iSelectedIndex).iY; bDragging = 2;
             }
             //if dragging move the block aligned to the grid;
             if (bDragging==2) {
@@ -386,10 +340,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                             } //endif (iSelectedIndex > 0) {
                             break;
                         } //wend
-                        
+
                         SetUpdate();
                     } //endif
-                } _endwith;                
+                } _endwith;
                 _with( aObject(iSelectedIndex) ) {
                     bool bUpdate=0;
                     if ((w->iX+w->iW) > iMaxX) { iMaxX = (w->iX+w->iW); iMaxXIdx=iSelectedIndex; bUpdate=true; }
@@ -399,44 +353,44 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 // if mouse is outside of visible area then scroll it
                 static char bSwap ; bSwap = (bSwap+1) & 3;
                 if (!bSwap) {
-                    RECT tRc; GetClientRect( hwnd , &tRc );                
+                    RECT tRc; GetClientRect( hwnd , &tRc );
                     if (iMouseY < 0)           { PostMessage( hwnd , WM_VSCROLL , SB_LINEUP   , 0 ); }
                     if (iMouseY >= tRc.bottom) { PostMessage( hwnd , WM_VSCROLL , SB_LINEDOWN , 0 ); }
                     if (iMouseX < 0)           { PostMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0 ); }
                     if (iMouseX >= tRc.right)  { PostMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0 ); }
                 } //endif (bSwap) {
             } //endif (bDragging==2) {
-                        
+
             return 0;
         }
         case WM_PAINT: {           //Update window from bitmap if ready
-            if (bDrawn <= 0) { ValidateRect( hwnd , NULL ); return 0; }            
-            HDC hdc = (HDC)wParam; // the device context to draw in            
-            
+            if (bDrawn <= 0) { ValidateRect( hwnd , NULL ); return 0; }
+            HDC hdc = (HDC)wParam; // the device context to draw in
+
             PAINTSTRUCT tPaint;
-            if (!wParam) { 
+            if (!wParam) {
                 BeginPaint( hwnd , &tPaint ); hdc = tPaint.hdc;
             } else {
                 GetClientRect( hwnd , &tPaint.rcPaint );
             }
-            
+
             _with(tPaint.rcPaint) {
                 BitBlt( hdc , w->left , w->top , w->right-w->left , w->bottom-w->top , hDcBuffer , w->left , w->top , SRCCOPY );
             } _endwith
-            
+
             if (!wParam) { EndPaint( hwnd , &tPaint ); }
             return 0;
         }
         case WM_SIZE: {            //Window Size changed discard bitmap
-            if (wParam == SIZE_MINIMIZED) { break; }  // resizing flag            
+            if (wParam == SIZE_MINIMIZED) { break; }  // resizing flag
             int nWid = LOWORD(lParam);  // width of client area
             int nHei = HIWORD(lParam); // height of client area
             if ( (nWid > iBufWid) || (nWid <= (iBufWid-64)) || (nHei > iBufHei) || (nHei <= (iBufHei-64)) ) {
                 SendMessage( hwnd , DIM_CREATE_BUFFER , 0 , lParam );
                 SetUpdate();
-            }            
+            }
             return 0;
-        }        
+        }
         case WM_HSCROLL:
         case WM_VSCROLL: {
             _const SB_ = (message==WM_VSCROLL ? SB_VERT : SB_HORZ);
@@ -450,7 +404,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 if (lParam > tInfo.nMax) { lParam = tInfo.nMax; }
                 tInfo.nTrackPos = lParam;
             }
-                
+
             int bFast=1, nPos = tInfo.nPos;
             switch (nScrollCode) {
                 case SB_TOP:           { tInfo.nPos = tInfo.nMin; break; }
@@ -461,17 +415,17 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 case SB_PAGEDOWN:      { tInfo.nPos = min( nPos+tInfo.nPage , tInfo.nMax ); break; }
                 case SB_PAGEUP:        { tInfo.nPos = max( nPos-tInfo.nPage , tInfo.nMin ); break; }
                 case SB_THUMBPOSITION: { break; }
-                case SB_THUMBTRACK:    { bFast=0; tInfo.nPos = tInfo.nTrackPos; break; }                
+                case SB_THUMBTRACK:    { bFast=0; tInfo.nPos = tInfo.nTrackPos; break; }
             }
-            
+
             //printf("{%i}\n",tInfo.nPos);
             tInfo.fMask = SIF_POS;
             if (!SetScrollInfo( hwnd , SB_ , &tInfo , true ) && tInfo.nPos) {
                 printf("Failed to set diagram scroll info: %i->%i\n",nPos,tInfo.nPos);
-            }            
+            }
             //if (tInfo.nPos==tInfo.nMin)             { EnableScrollBar( hwnd , SB_ , ESB_DISABLE_LTUP ); }
-            //if (tInfo.nPos>=tInfo.nMax-tInfo.nPage) { EnableScrollBar( hwnd , SB_ , ESB_DISABLE_RTDN ); }            
-            if (nPos != tInfo.nPos) { 
+            //if (tInfo.nPos>=tInfo.nMax-tInfo.nPage) { EnableScrollBar( hwnd , SB_ , ESB_DISABLE_RTDN ); }
+            if (nPos != tInfo.nPos) {
                 if (bDragging) {
                     GetScrollInfo( hwnd , SB_ , &tInfo );
                     if (message==WM_VSCROLL) { iDragStartY += (nPos-tInfo.nPos); } else { iDragStartX += (nPos-tInfo.nPos); }
@@ -479,113 +433,108 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 if (nPos == tInfo.nMin)          { EnableScrollBar( hwnd , SB_ , ESB_ENABLE_BOTH ); }
                 if (nPos>=tInfo.nMax-tInfo.nPage){ EnableScrollBar( hwnd , SB_ , ESB_ENABLE_BOTH ); }
                 if (bFast) { SetUpdate(); } else { SetUpdateAsync(); }
-            }            
+            }
             return 0;
-        }        
-        case WM_TIMER: {           //TIMER events (REDRAW!)            
+        }
+        case WM_TIMER: {           //TIMER events (REDRAW!)
             WindowDraw();
             return 0;
         }
         case DIM_CREATE_BUFFER: {  //INTERNAL: recreate bitmap buffer
-            int nWid = LOWORD(lParam);  // width of client area     
-            int nHei = HIWORD(lParam); // height of client area            
+            int nWid = LOWORD(lParam);  // width of client area
+            int nHei = HIWORD(lParam); // height of client area
             iBufWid = 64+((nWid | 63) & (~63)); //gives a room of -63 to 63 extra pixels
             iBufHei = 64+((nHei | 63) & (~63));
             HDC hdc = GetDC( hwnd );
-            if (!hDcBuffer) { 
-                hDcBuffer = CreateCompatibleDC( hdc ); 
+            if (!hDcBuffer) {
+                hDcBuffer = CreateCompatibleDC( hdc );
                 SelectObject( hdc , hCtlFont );
             }
             hBmBuffer = CreateCompatibleBitmap( hdc , iBufWid , iBufHei );
             DeleteObject( SelectObject( hDcBuffer , hBmBuffer ) );
-            ScrollUpdate( hwnd , nWid , nHei );            
+            ScrollUpdate( hwnd , nWid , nHei );
             SetUpdate();
             return 1;
         }
         case WM_MOUSEWHEEL: {      //Mouse wheel event
             int zDelta = (short) HIWORD(wParam);    // wheel rotation
-            //fwKeys = LOWORD(wParam);    // key flags            
+            //fwKeys = LOWORD(wParam);    // key flags
             //xPos = (short) LOWORD(lParam);    // horizontal position of pointer
-            //yPos = (short) HIWORD(lParam);    // vertical position of pointer            
+            //yPos = (short) HIWORD(lParam);    // vertical position of pointer
             SCROLLINFO tInfo = { .cbSize = sizeof(SCROLLINFO) , .fMask = SIF_ALL };
             GetScrollInfo( hwnd , SB_VERT , &tInfo );
             const int nPos = tInfo.nPos;
             tInfo.nPos = min( tInfo.nPos+zDelta/-2 , tInfo.nMax );
             tInfo.fMask = SIF_POS;
-            SetScrollInfo( hwnd , SB_VERT , &tInfo , true );            
-            if (bDragging) { 
+            SetScrollInfo( hwnd , SB_VERT , &tInfo , true );
+            if (bDragging) {
                 GetScrollInfo( hwnd , SB_VERT , &tInfo );
-                iDragStartY += (nPos-tInfo.nPos); 
+                iDragStartY += (nPos-tInfo.nPos);
                 SendMessage( hwnd , WM_MOUSEMOVE , 0 , MAKELPARAM( iMouseX , iMouseY ));
             }
             SetUpdate();
             return 0;
         }
         case WM_CREATE: {          //Initialize control
-        
-            #define _SetHandler( _pFN , _Name , _Color )  g_ObjectTypeInfo[ iIdx++ ].pfHandlerProc = _pFN;
-            int iIdx=0;
-            ForEachObjectType( _SetHandler );
-            #undef _SetHandler
-            
+
+            initComponents(); //basedecl.h
+
             hSmallFont = GetStockObject( SYSTEM_FONT );
-            hbBack = CreateSolidBrush( cBack );            
+            hbBack = CreateSolidBrush( cBack );
             hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
             hpSelected = CreatePen( PS_SOLID , 4 , cSelected );
             PostMessage( hwnd , WM_HSCROLL , 0,0 );
             PostMessage( hwnd , WM_VSCROLL , 0,0 );
 
-            for (int N=0 ; N < _countof(g_ObjectTypeInfo) ; N++) { //initialize brushes for object palette theme                
-                hbObject[N] = CreateSolidBrush( g_ObjectTypeInfo[N].uColor );
-            }
-            
             ptOrder = malloc(iObjMaxCount*sizeof(*ptOrder));
-            
+
             // generate semi-random objects for initial tests
             int iPosY=0, iPosX=0 ; iObjCount = 0;
             { //sample string
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(StringObject)+12);                
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
                 _with( aObject(iObjCount) ) {
                     w->iX = 10          ; w->iW = 128;
                     w->iY = iPosY       ; w->iH = 48;
-                    w->iType = otString ; w->bClass = ocTextData;
-                    strcpy( w->zName , "MyString" );                    
+                    w->iClassID = idClsString;
+                    strncpy( w->zName , "MyString" , _countof(w->zName) );
                     iPosY += w->iH+8;
                 } _endwith;
-                _with( aObject_Content(iObjCount,StringObject) ) {
+                _with( aObject_Content(iObjCount,ClsStringStruct) ) {
                     w->iLength = 11; w->iBuffer = 12;
                     strcpy( w->zContent , "Hello World" );
-                } _endwith;                
+                } _endwith;
                 iObjCount++;
             }
             { //sample device
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(DeviceObject));                
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
                 _with( aObject(iObjCount) ) {
                     w->iX = 10          ; w->iW = 128;
                     w->iY = iPosY       ; w->iH = 48;
-                    w->iType = otCout   ; w->bClass = ocDevice;
-                    strcpy( w->zName , "STDOUT" );                    
-                    iPosY += w->iH+8;                                        
+                    w->iClassID = idClsStdout;
+                    strncpy( w->zName , "STDOUT" , _countof(w->zName) );
+                    iPosY += w->iH+8;
                 } _endwith;
-                _with( aObject_Content(iObjCount,DeviceObject) ) {                    
+                _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
+
                 } _endwith;
                 iObjCount++;
             }
-            
-            iObjTotal = iObjCount;            
-            
+
+            iObjTotal = iObjCount;
+
             return 1;
         }
         case WM_SETFONT: {         //Set New Font
-            if (hSmallFont) { DeleteObject( hSmallFont ); DeleteObject( hSmallFontB ); hSmallFont = hSmallFontB = NULL; }            
-            hCtlFont = (HFONT)wParam; SetUpdate();                        
+            if (hSmallFont) { DeleteObject( hSmallFont ); DeleteObject( hSmallFontB ); hSmallFont = hSmallFontB = NULL; }
+            hCtlFont = (HFONT)wParam; SetUpdate();
             //SelectObject( hDcBuffer , hCtlFont );
             LOGFONT tFont; GetObject( hCtlFont , sizeof(tFont) , &tFont );
             tFont.lfHeight = (tFont.lfHeight*2)/3;
-            tFont.lfWidth  = (tFont.lfWidth *2)/3;            
+            tFont.lfWidth  = (tFont.lfWidth *2)/3;
             hSmallFont = CreateFontIndirect( &tFont );
             tFont.lfWeight = FW_BOLD;
             hSmallFontB = CreateFontIndirect( &tFont );
+            return 0;
         }
         case WM_GETFONT: {         //Retrieve Current Font
             return (LRESULT)hCtlFont;
@@ -618,22 +567,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //printf("%i to %i\n",iStartIdx,iEndIdx);
             for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
                 _with( aObject(iIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };                    
-                    const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) };                    
-                    if (PtInRect( &tRc , pt )) { 
+                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                    const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) };
+                    if (PtInRect( &tRc , pt )) {
                         printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
-                        iSelectedIndex = iIndex ; break ; 
+                        iSelectedIndex = iIndex ; break ;
                     }
                 } _endwith;
             }
             if (iOldSel != iSelectedIndex) { SetUpdate(); }
-            
+
             //start of the dragging position
-            if (iSelectedIndex >= 0) {                
+            if (iSelectedIndex >= 0) {
                 iDragStartX = (short)LOWORD(lParam)  ; iDragStartY = (short)HIWORD(lParam);
                 bDragging = 1; SetCapture( hwnd );
             }
-            
+
             return 0;
         }
         case WM_LBUTTONUP: {       //Button released
@@ -647,28 +596,26 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
           return 0;
         }
     }
-    
+
     return DefWindowProc( hwnd ,message , wParam , lParam );
     #undef SetUpdateAsync
-    #undef SetUpdate    
+    #undef SetUpdate
     #undef aObject
 }
-    
+
 void Diagram_Init( HINSTANCE hinstance ) {
-    // Setup window class  
-    WNDCLASS wcls = {0};
-    _with(wcls) {
-        w->style         = 0; //CS_HREDRAW | CS_VREDRAW;
-        w->lpfnWndProc   = Diagram_WndProc;
-        w->cbClsExtra    = 0;
-        w->cbWndExtra    = 0;
-        w->hInstance     = hinstance;
-        w->hIcon         = NULL;
-        w->hCursor       = LoadCursor( NULL, IDC_ARROW );
-        w->hbrBackground = NULL;
-        w->lpszMenuName  = NULL;
-        w->lpszClassName = "Diagram";
-    } _endwith
-    
+    // Setup window class
+    WNDCLASS wcls = {
+        .style         = 0, //CS_HREDRAW | CS_VREDRAW;
+        .lpfnWndProc   = Diagram_WndProc,
+        .cbClsExtra    = 0,
+        .cbWndExtra    = 0,
+        .hInstance     = hinstance,
+        .hIcon         = NULL,
+        .hCursor       = LoadCursor( NULL, IDC_ARROW ),
+        .hbrBackground = NULL,
+        .lpszMenuName  = NULL,
+        .lpszClassName = "Diagram"
+    };
     if ( !RegisterClass( &wcls ) ) { puts("Failed to register Diagram Control"); }
 }

@@ -28,10 +28,12 @@ UINT g_CurItemID=0 , g_CurItemState=0;
 HMENU g_hCurMenu=NULL;
 #define _Wnd MAIN
 
-#include "modules\helpers.c"
-#include "controls\Diagram.c"
-#include "modules\wndCreate.c"
-#include "modules\menu.c"
+#include "modules/helpers.c"
+#include "components/_header.h"
+#include "components/_base.h"
+#include "controls/Diagram.c"   // requires _header.h , _base.h
+#include "modules/wndCreate.c"
+#include "modules/menu.c"       // requires wndCreate.c
 
 HRESULT (*fnSetWindowTheme) (HWND,LPCWSTR,LPCWSTR) = NULL;
 
@@ -178,11 +180,12 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             if (PtInRect( &rc , pt )) {
                 if (g_dwEnableSizeBorder) { UpdateSizeBorder( hwnd , g_dwEnableSizeBorder ) ; g_dwEnableSizeBorder = 0; }
                 break;
-            } //may falltrough
+            }
+            [[fallthrough]]; //may falltrough
         }
         case WM_MOUSEMOVE: {
             wparam = HTCLIENT;
-            //falltrough
+            [[fallthrough]]; //falltrough
         }
         case WM_NCMOUSEMOVE: {
             bool bEnabled = false , bChanged = false;
@@ -255,22 +258,21 @@ int main() {
     g_APPINSTANCE = GetModuleHandle(NULL);
 
     MSG wMsg = {0};
-    WNDCLASS wcls = {0};
     HWND hwnd;
 
     // Setup window class
-    _with(wcls) {
-        w->style         = CS_HREDRAW | CS_VREDRAW;
-        w->lpfnWndProc   = WndProc;
-        w->cbClsExtra    = 0;
-        w->cbWndExtra    = 0;
-        w->hInstance     = g_APPINSTANCE;
-        w->hIcon         = LoadIcon( g_APPINSTANCE, "FB_PROGRAM_ICON" );
-        w->hCursor       = LoadCursor( NULL, IDC_ARROW );
-        w->hbrBackground = GetSysColorBrush( COLOR_BTNFACE );
-        w->lpszMenuName  = NULL;
-        w->lpszClassName = g_pzAppName;
-    } _endwith
+    WNDCLASS wcls = {
+        .style         = CS_HREDRAW | CS_VREDRAW,
+        .lpfnWndProc   = WndProc,
+        .cbClsExtra    = 0,
+        .cbWndExtra    = 0,
+        .hInstance     = g_APPINSTANCE,
+        .hIcon         = LoadIcon( g_APPINSTANCE, "FB_PROGRAM_ICON" ),
+        .hCursor       = LoadCursor( NULL, IDC_ARROW ),
+        .hbrBackground = GetSysColorBrush( COLOR_BTNFACE ),
+        .lpszMenuName  = NULL,
+        .lpszClassName = g_pzAppName
+    };
 
     // Register the window class
     if ( !RegisterClass( &wcls ) ) {
