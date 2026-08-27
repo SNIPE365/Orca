@@ -7,6 +7,7 @@ static void defines () { //defines
     #define _const const __auto_type
     #define _with(_var) { _const w = &_var;
     #define _endwith }
+    #define _rnd(_N) (rand()%(_N))
 
     #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)
         #define _constexpr( _parms... ) constexpr __auto_type _parms

@@ -1,28 +1,4 @@
-// list control inline funcitons
-inline LRESULT lbAddString(int iID, LPCTSTR pzText, LPARAM dwData) {
-    LRESULT iResu = SendMessage(_CTL(iID), LB_ADDSTRING, 0, (LPARAM)pzText);
-    if (iResu != LB_ERR && iResu != LB_ERRSPACE) {
-        SendMessage(_CTL(iID), LB_SETITEMDATA, (WPARAM)iResu, (LPARAM)dwData);
-    }
-    return iResu;
-}
-
-// edit control inline functions
-inline void emSetLimitText(int iID, int iLimit) {
-    SendMessage(_CTL(iID), EM_SETLIMITTEXT, (WPARAM)iLimit, 0);
-}
-
-// combobox control inline functions
-inline LRESULT cbAddString(int iID, LPCTSTR pzText, LPARAM dwData) {
-    LRESULT iResu = SendMessage(_CTL(iID), CB_ADDSTRING, 0, (LPARAM)pzText);
-    if (iResu != CB_ERR && iResu != CB_ERRSPACE) {
-        SendMessage(_CTL(iID), CB_SETITEMDATA, (WPARAM)iResu, (LPARAM)dwData);
-    }
-    return iResu;
-}
-inline LRESULT cbSetCurSel(int iID, int iIndex) {
-    SendMessage(_CTL(iID), CB_SETCURSEL, (WPARAM)iIndex, 0);
-}
+#include "controlFuncs.c"
 
 if (_CTL(wcMain)) { return 0; }
 _CTL(wcMain) = hwnd;

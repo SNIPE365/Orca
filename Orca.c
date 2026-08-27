@@ -9,6 +9,7 @@
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
+//#include <dlgs.h>
 
 //#include <uxtheme.h>
 
@@ -17,7 +18,7 @@
 HINSTANCE g_APPINSTANCE;  //instance
 HMENU g_WndMenu;          //menu
 //AppName
-const static char* g_pzAppName = "Orca IDE";
+const static char* g_pzAppName = "Orca IDE: ";
 const static char* g_BinaryGCC[] = {
     "g:\\_OldMingw\\mingw-w64-10.0.0\\bin\\gcc.exe",
     "gcc.exe",
@@ -131,6 +132,7 @@ static int ProjectBuild() {
 
 // *************** Procedure Function ****************
 static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lparam ) {
+    #include "modules/controlFuncs.c"
     switch ( message ) {
         case WM_CREATE:  { //Window was created
             return wndCreate( hwnd );
@@ -139,7 +141,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             _auto wNotifyCode = (int)(HIWORD(wparam));
             _const wID = LOWORD(wparam);
             _const hwndCtl = (HWND)lparam;
-            if (!hwndCtl && !wNotifyCode) { wNotifyCode = -1; }
+            if (!hwndCtl) { wNotifyCode = ~wNotifyCode; }
             switch (wNotifyCode) {
                 case -1:         { //Command from the menu
                     if (wID != g_CurItemID) { return 0; } //not valid menu event
@@ -153,23 +155,27 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                     g_hCurMenu = NULL;
                     return g_CurItemID = 0; //break
                 }
-                case 1:          { //Accelerator
+                case -2:         { //Accelerator
                     //ProcessAccelerator( wID )
                     return 0;
                 }
-                case EN_CHANGE:  {
-                    //printf("%i\n",SendMessage(_CTL(wID),WM_GETTEXTLENGTH,0,0));
-                    return 0;
-                } //EN_CHANGE
-                case BN_CLICKED: { //button click
-                    switch (LOWORD(wparam)) {
-                        case wcBtnBuild: {
-                            ProjectBuild();
-                            break;
-                        } //wcButton
-                    } // switch (lparam)
-                } //BN_CLICKED
-            } //switch HIWORD(wparam)
+            } //switch (wNotifyCode)
+            switch (wID) {
+                case wcDgmSelect: { switch (wNotifyCode) {
+                    case CBN_SELCHANGE: {
+                        puts("CBN_SELCHANGE");
+                        SendMessage( _CTL(wcDiagram) , DIM_SELECT , 0 , (LPARAM)cbGetItemData(wID, cbGetCurSel(wID)) );
+                    } break;
+                } break; } break;
+                case wcBtnBuild:  { switch (wNotifyCode) {
+                    case BN_CLICKED: { ProjectBuild(); break; }
+                } break; } break;
+                case wcEdtCmd:    { switch (wNotifyCode) {
+                    case EN_CHANGE: {
+                            //
+                        } break;
+                } break; } break;
+            } //switch (wID)
             return 0;
         }
         case WM_TIMER: {

@@ -1,3 +1,7 @@
+#include <windows.h>
+#include <winscard.h>
+_const _MaxAllocationGap = 128;
+
 typedef struct {
     int32_t  iY;                //+ 4= 4 // Y position of the object
     int16_t  iX;                //+ 2= 6 // X position of the object
@@ -8,15 +12,27 @@ typedef struct {
     char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
 
+typedef struct {
+    int iObjectCount;
+    int iObjectMaxCount;
+    DiagramObjectStruct** pObjects;
+    //cache members
+    int iViewX, iViewY;
+    int iSelectedIdx;
+} DiagramFileStruct;
+
+typedef enum {
+    DIM_BASE = WM_USER,
+    DIM_INSERT,
+    DIM_REMOVE,
+    DIM_SELECT,
+    DIM_TESTFILE,
+    /* PRIVATE ONES */
+    DIM_CREATE_BUFFER,
+} DiagramEnum;
+
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
 
-    typedef enum {
-        DIM_BASE = WM_USER,
-        DIM_INSERT,
-        DIM_REMOVE,
-        /* PRIVATE ONES */
-        DIM_CREATE_BUFFER,
-    } DiagramEnum;
     typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
@@ -34,9 +50,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
     #define aObject(_I) (*ptOrder[_I])
     #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]->Content)))
-    _const _MaxGap = 128;
 
-    static int iObjCount=0, iObjMaxCount=_MaxGap; //object counting / limit
+    static int iObjCount=0, iObjMaxCount=0; //object counting / limit
     static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object
     static int iViewX=0, iViewY=0;                //scrolling offset
@@ -47,10 +62,111 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
     static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
     static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
-
+    static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
 
     #include "../components/_basedecl.h"
+
+    DiagramFileStruct* CreateTestDiagram() {
+
+        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
+
+        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
+        if (!pFile) return NULL;
+
+        pFile->iObjectMaxCount = _MaxAllocationGap;
+        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
+        if (!ptOrder) { free(pFile); return NULL; }
+
+        int iPosY=10, iPosX=0 , iObjCount = 0;
+        { //sample string
+            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
+            _with( aObject(iObjCount) ) {
+                w->iX = 10          ; w->iW = 128;
+                w->iY = iPosY       ; w->iH = 48;
+                w->iClassID = idClsString;
+                strncpy( w->zName , "MyString" , _countof(w->zName) );
+                iPosY += w->iH+8;
+            } _endwith;
+            _with( aObject_Content(iObjCount,ClsStringStruct) ) {
+                w->iLength = 11; w->iBuffer = 12;
+                strcpy( w->zContent , "Hello World" );
+            } _endwith;
+            iObjCount++;
+        }
+        { //sample device
+            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+            _with( aObject(iObjCount) ) {
+                w->iX = 10          ; w->iW = 128;
+                w->iY = iPosY       ; w->iH = 48;
+                w->iClassID = idClsStdout;
+                strncpy( w->zName , "STDOUT" , _countof(w->zName) );
+                iPosY += w->iH+8;
+            } _endwith;
+            _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
+            } _endwith;
+
+            iObjCount++;
+        }
+
+        pFile->iObjectCount = iObjCount;
+        return pFile;
+
+        //#undef aObject_Content
+    }
+    DiagramFileStruct* CreateRandomTestDiagram() {
+
+        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
+
+        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
+        if (!pFile) return NULL;
+
+        pFile->iObjectMaxCount = _MaxAllocationGap;
+        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
+        if (!ptOrder) { free(pFile); return NULL; }
+
+        int iPosY=10, iObjCount = 0;
+        for (int iN = 0 ; iN < _rnd(_MaxAllocationGap) ; iN++) {
+            int iPosX=_rnd(16)*8;
+            if (rand()&1) { //sample string
+                int iLen = 1+_rnd(16), iWid = 48+iLen*8;
+                if (iWid > 255) iWid = 255;
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+iLen+1);
+                _with( aObject(iObjCount) ) {
+                    w->iX = iPosX       ; w->iW = iWid;
+                    w->iY = iPosY       ; w->iH = 48+_rnd(4)*8;
+                    w->iClassID = idClsString;
+                    sprintf( w->zName , "Str%02d:%02d" , iLen , iObjCount );
+                    iPosY += w->iH+(1+_rnd(4))*8;
+                } _endwith
+                _with( aObject_Content(iObjCount,ClsStringStruct) ) {
+                    w->iLength = iLen; w->iBuffer = iLen+1;
+                    for (int i = 0 ; i < iLen ; i++) {
+                        w->zContent[i] = (rand()&1) ? 'a' + _rnd(26) : '0' + _rnd(10);
+                    }
+                    w->zContent[iLen] = 0;
+                } _endwith
+            } else { //sample device
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+                _with( aObject(iObjCount) ) {
+                    w->iX = iPosX       ; w->iW = 128;
+                    w->iY = iPosY       ; w->iH = 48+_rnd(4)*8;
+                    w->iClassID = idClsStdout;
+                    sprintf( w->zName , "STDOUT%02d" , iObjCount );
+                    iPosY += w->iH+(1+_rnd(4))*8;
+                } _endwith
+                _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
+                    //
+                } _endwith
+            }
+            iObjCount++;
+        }
+
+        pFile->iObjectCount = iObjCount;
+        return pFile;
+
+        //#undef aObject_Content
+    }
 
     // ------------- Diagram functions -------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -113,9 +229,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         int iIndex;
         for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
+            if (iIndex < (iObjCount-1)) {
+                _with( aObject(iIndex+1) ) {
+                    //check/skip if item is invisible (caused by moving or scroll down)
+                    if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }
+                } _endwith
+            }
             _with( aObject(iIndex) ) {
-                //check/skip if item is invisible (caused by moving or scroll down)
-                if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }
                 //clculate position Y and see if it's after the visible area (early stop)
                 int iPosY = w->iY-iViewY, iPosX = w->iX-iViewX;
                 if (iPosY >= iBufHei) { break; }
@@ -127,7 +247,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     int iXX, iYY;
                     const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH);
                     _with( aObject(iIndex+1) ) {
-                        iXX = w->iX+w->iW/2; iYY = w->iY;
+                        iXX = w->iX-iViewX+w->iW/2; iYY = w->iY-iViewY;
                     } _endwith;
                     for (int iN=0; iN<3; iN++) {
                         const int iOX = (iN & 1), iOY = (iN/2);
@@ -180,7 +300,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     int InsertObject( int iPosX , int iPosY ) {
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
-            iObjMaxCount += _MaxGap;
+            iObjMaxCount += _MaxAllocationGap;
             ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
             printf("Reallocate (expand) to %i objects\n",iObjMaxCount);
             //todo: check for faillure
@@ -264,8 +384,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         } //endif
 
         //shrink if too much space left in order buffer...
-        if ( iObjCount <= ((iObjMaxCount-_MaxGap)-((_MaxGap)/2)) ) {
-            iObjMaxCount -= _MaxGap;
+        if ( iObjCount <= ((iObjMaxCount-_MaxAllocationGap)-((_MaxAllocationGap)/2)) ) {
+            iObjMaxCount -= _MaxAllocationGap;
             ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
             printf("Reallocate (srhink) to %i objects\n",iObjMaxCount);
             //todo: check for faillure
@@ -456,6 +576,45 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             SetUpdate();
             return 1;
         }
+        case DIM_SELECT: {         //lParam = DiagramFileStruct*
+            LRESULT lRes = (LRESULT)pDiagram;
+            SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
+            if (pDiagram) {
+                //save current diagram state back into the file structure
+                _with( *pDiagram ) {
+                    w->pObjects = ptOrder;
+                    w->iObjectCount = iObjCount;
+                    w->iObjectMaxCount = iObjMaxCount;
+                    ///update view cache
+                    w->iViewX = iViewX;
+                    w->iViewY = iViewY;
+                    w->iSelectedIdx = iSelectedIndex;
+                    //GetScrollInfo( hwnd , SB_HORZ , &tInfo); w->iPosH = tInfo.nPos;
+                    //GetScrollInfo( hwnd , SB_VERT , &tInfo); w->iPosV = tInfo.nPos;
+                } _endwith
+            }
+            pDiagram = (DiagramFileStruct*)lParam;
+            //update current diagram state from the new file structure
+            _with( *pDiagram ) {
+                ptOrder = w->pObjects;
+                iObjCount = w->iObjectCount; iObjMaxCount = w->iObjectMaxCount;
+                //restore from cached (when it makes sense)
+                iSelectedIndex = w->iSelectedIdx;
+                iMaxXIdx = iMaxYIdx = -1;
+                iStartIdx = 0 ; iEndIdx = -1;
+                iViewX = w->iViewX; iViewY = w->iViewY;
+                ScrollUpdate( hwnd , -1 , -1 );
+                tInfo.nPos = iViewX ; SetScrollInfo( hwnd , SB_HORZ , &tInfo , TRUE );
+                tInfo.nPos = iViewY ; SetScrollInfo( hwnd , SB_VERT , &tInfo , TRUE );
+                SetUpdate();
+            } _endwith
+            return lRes;
+            break;
+        }
+        case DIM_TESTFILE: {       //wParam = IsRandom;
+            return (LRESULT) ((wParam) ? CreateRandomTestDiagram() : CreateTestDiagram());
+            break;
+        }
         case WM_MOUSEWHEEL: {      //Mouse wheel event
             int zDelta = (short) HIWORD(wParam);    // wheel rotation
             //fwKeys = LOWORD(wParam);    // key flags
@@ -485,43 +644,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             hpSelected = CreatePen( PS_SOLID , 4 , cSelected );
             PostMessage( hwnd , WM_HSCROLL , 0,0 );
             PostMessage( hwnd , WM_VSCROLL , 0,0 );
-
-            ptOrder = malloc(iObjMaxCount*sizeof(*ptOrder));
-
-            // generate semi-random objects for initial tests
-            int iPosY=0, iPosX=0 ; iObjCount = 0;
-            { //sample string
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
-                _with( aObject(iObjCount) ) {
-                    w->iX = 10          ; w->iW = 128;
-                    w->iY = iPosY       ; w->iH = 48;
-                    w->iClassID = idClsString;
-                    strncpy( w->zName , "MyString" , _countof(w->zName) );
-                    iPosY += w->iH+8;
-                } _endwith;
-                _with( aObject_Content(iObjCount,ClsStringStruct) ) {
-                    w->iLength = 11; w->iBuffer = 12;
-                    strcpy( w->zContent , "Hello World" );
-                } _endwith;
-                iObjCount++;
-            }
-            { //sample device
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
-                _with( aObject(iObjCount) ) {
-                    w->iX = 10          ; w->iW = 128;
-                    w->iY = iPosY       ; w->iH = 48;
-                    w->iClassID = idClsStdout;
-                    strncpy( w->zName , "STDOUT" , _countof(w->zName) );
-                    iPosY += w->iH+8;
-                } _endwith;
-                _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
-
-                } _endwith;
-                iObjCount++;
-            }
-
-            iObjTotal = iObjCount;
-
             return 1;
         }
         case WM_SETFONT: {         //Set New Font
@@ -598,6 +720,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     return DefWindowProc( hwnd ,message , wParam , lParam );
+    #undef aObject_Content
     #undef SetUpdateAsync
     #undef SetUpdate
     #undef aObject

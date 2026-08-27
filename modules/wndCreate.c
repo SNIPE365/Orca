@@ -1,3 +1,4 @@
+#include <windows.h>
 #define _StP(_ID,_Off) { .bEnd=0 , .bUnit=0 , .iID = (_ID) , .iOffset = ((_Off)*10) }
 #define _EnP(_ID,_Off) { .bEnd=1 , .bUnit=0 , .iID = (_ID) , .iOffset = ((_Off)*10) }
 #define _StT(_ID,_Off) { .bEnd=0 , .bUnit=1 , .iID = (_ID) , .iOffset = ((_Off)*100) }
@@ -181,18 +182,20 @@ LRESULT wndCreate( HWND hwnd ) {
     }
 
 
-    cbAddString( wcDgmSelect , "Global" , 0 );
-    cbAddString( wcDgmSelect , "Devices (I/O)" , 0 );
-    cbAddString( wcDgmSelect , "Components" , 0 );
-    iResu = cbAddString( wcDgmSelect , "Main" , 0 );
+    cbAddString( wcDgmSelect , "Global" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
+    cbAddString( wcDgmSelect , "Devices (I/O)" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
+    cbAddString( wcDgmSelect , "Components" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
+    iResu = cbAddString( wcDgmSelect , "Main" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 0 , 0 ) );
     SetFocus( _CTL(wcDgmSelect) );
     cbSetCurSel( wcDgmSelect , iResu );
+    ctlParentCommand( wcDgmSelect , CBN_SELCHANGE );
+
     SetFocus( _CTL(wcEdtCmd) );
 
     puts("ready!");
 
-
     SetFocus(hwnd);
+    SetForegroundWindow(hwnd);
 
     return 1;
 }

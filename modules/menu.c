@@ -3,7 +3,7 @@
 
 #include "..\modules\menuActions.c"
 
-#ifndef main_module  
+#ifndef main_module
   _err( "Compile from " TOSTRING(main_module) ".c" )
 #endif
 
@@ -20,6 +20,8 @@
      __Separator() */\
      __Entry( meFile_Exit     , "&Quit" "\tAlt+F4"  , _Ctrl        , VK_Q , &File_Exit   ) \
    __EndSubMenu() \
+   __SubMenu( "*[" __TIMESTAMP__ "]" ) \
+   __EndSubMenu()
    /*__SubMenu( "&Edit" ) \
       __Entry( meEdit_Undo    , "&Undo"  "\tCtrl+Z"  ,              ,      , &Edit_Undo ) \
       __Entry( meEdit_Redo    , "&Redo"              , _Ctrl+_Shift , VK_Z , &Edit_Redo ) \
@@ -37,7 +39,7 @@
       __Entry( meCode_Clear   , "Cl&ear output"      , _Ctrl+_Shift , VK_B , &Code_ClearOutput ) \
    __EndSubMenu()*/
 //-------------------------------------------------------------------------------------------
-   
+
 #define _Shift FSHIFT
 #define _Ctrl  FCONTROL
 #define _Alt   FALT
@@ -56,15 +58,16 @@ typedef enum {
 #undef MayEnumEntry
 #undef MayEnumSubMenu
 
-static void* menu_AddSubMenu( void* hMenu , char* pzText , int iID /* = 0 */ ) {        
+static void* menu_AddSubMenu( void* hMenu , char* pzText , int iID /* = 0 */ ) {
     if (!IsMenu(hMenu)) { return NULL; }
     _auto hResult = CreatePopupMenu();
     //AppendMenu( hMenu , MF_POPUP | MF_STRING , (UINT_PTR)(hResult) , pzText )
     MENUITEMINFOA tItem = { sizeof(MENUITEMINFO) };
     _with(tItem) {
-        w->fMask      = MIIM_SUBMENU | MIIM_ID | MIIM_STRING;
-        w->hSubMenu   = hResult ; w->wID = iID;
-        w->dwTypeData = pzText;
+        w->fMask      = MIIM_SUBMENU | MIIM_ID | MIIM_STATE | MIIM_TYPE;
+        w->hSubMenu   = hResult ; w->wID    = iID;
+        w->dwTypeData = pzText  ; w->fState = MFS_ENABLED; w->fType = MFT_STRING;
+        if (pzText[0]=='*') { w->dwTypeData = pzText+1; w->fState |= MFS_GRAYED ; w->fType |= MFT_RIGHTJUSTIFY ; }
     } _endwith
     InsertMenuItemA( hMenu , -1 , true , &tItem );
     if ( ( hMenu==g_WndMenu ) && (_CTL(wcMain)) ) { DrawMenuBar( _CTL(wcMain) ); }
@@ -86,14 +89,14 @@ static int menu_MenuAddEntry( void* hMenu , int iID /* = 0 */ , char* pzText /* 
 //MFS_CHECKED , MFS_DEFAULT , MFS_DISABLED , MFS_ENABLED , MFS_GRAYED , MFS_HILITE , MFS_UNCHECKED , MFS_UNHILITE
 static int menu_MenuState( void* hMenu , int iID , int bState ) {
   if (!IsMenu(hMenu)) { return -1; }
-  MENUITEMINFO tItem =  { sizeof(MENUITEMINFO) , MIIM_STATE , .fState = bState };  
+  MENUITEMINFO tItem =  { sizeof(MENUITEMINFO) , MIIM_STATE , .fState = bState };
   SetMenuItemInfo( hMenu , iID , false , &tItem );
   return bState;
 } //menu_MenuState()
 static int menu_MenuText( void* hMenu , int iID , char* pzText ) {
   if (!IsMenu(hMenu)) { return -1; }
   MENUITEMINFO tItem = { sizeof(MENUITEMINFO) , MIIM_TYPE };
-  GetMenuItemInfoA( hMenu , iID , false , &tItem );   
+  GetMenuItemInfoA( hMenu , iID , false , &tItem );
   tItem.dwTypeData = pzText;
   SetMenuItemInfoA( hMenu , iID , false , &tItem );
   return strlen(pzText);
@@ -106,14 +109,14 @@ static void menu_Trigger( int iID ) {
   SendMessage( _CTL(wcMain) , WM_COMMAND , iID , 0 );
 } //menu_Trigger()
 
-static HMENU menu_CreateMainMenu(void) {   
+static HMENU menu_CreateMainMenu(void) {
     #define _SubMenu( _sText... ) \
     { \
       _auto hMenu = menu_AddSubMenu( hMenu , _sText , 0 ); \
 
     #define _EndSubMenu() }
     #define _Separator() menu_MenuAddEntry( hMenu , 0 , NULL , NULL , 0 );
-    
+
     /* advanced macro for auto accelerator
     #if len(#_Accelerator)
         #if (_Modifiers and _Shift)
@@ -133,9 +136,9 @@ static HMENU menu_CreateMainMenu(void) {
         #endif
         #if _Accelerator >= VK_F1 and _Accelerator <= VK_F24
             #define _sKey "F" & (_Accelerator-((VK_F1)-1))
-        #elseif _Accelerator >= asc("A") and _Accelerator <= asc("Z")           
+        #elseif _Accelerator >= asc("A") and _Accelerator <= asc("Z")
             #define _sKey +chr(_Accelerator)
-        #elseif _Accelerator >= asc("0") and _Accelerator <= asc("9")           
+        #elseif _Accelerator >= asc("0") and _Accelerator <= asc("9")
             #define _sKey +chr(_Accelerator)
         #else
             #define _sKey s##_Accelerator
@@ -147,15 +150,15 @@ static HMENU menu_CreateMainMenu(void) {
         #undef _sKey
     #else
     */
-        
+
     #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) \
         { \
             _const _sText2 = _Text ; \
             menu_MenuAddEntry( hMenu , _idName , _sText2 , _Callback+0 , 0 ); \
         }
-        
-    _auto hMenu = CreateMenu() ; g_WndMenu = hMenu;      
-      
+
+    _auto hMenu = CreateMenu() ; g_WndMenu = hMenu;
+
     ForEachMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
 
     return hMenu;
