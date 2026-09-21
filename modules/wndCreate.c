@@ -182,13 +182,16 @@ LRESULT wndCreate( HWND hwnd ) {
     }
 
 
-    cbAddString( wcDgmSelect , "Global" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
-    cbAddString( wcDgmSelect , "Devices (I/O)" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
-    cbAddString( wcDgmSelect , "Components" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , 0 ) );
-    iResu = cbAddString( wcDgmSelect , "Main" , SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 0 , 0 ) );
+    cbAddString( wcDgmFilter , "{Global}" , -1 );
+    #define _AddClassGroup( _Id, _Name ) if (_Id != cgrpInvalid) cbAddString( wcDgmFilter , _Name , _Id );
+    _ForEachBuiltinClassGroup( _AddClassGroup );
+    #undef _AddClassGroup
+    cbAddString( wcDgmSelect , "Test1" , (LPARAM)(g_ProjectFiles[g_ProjectFileCount++] = (void*)SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , (LPARAM)"Test1" ) ));
+    iResu = cbAddString( wcDgmSelect , "Main" , (LPARAM)(g_ProjectFiles[g_ProjectFileCount++] = (void*)SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 0 , (LPARAM)"Main" ) ));
+    cbSelectString( wcDgmFilter , 0 , "{global}" );
     SetFocus( _CTL(wcDgmSelect) );
     cbSetCurSel( wcDgmSelect , iResu );
-    ctlParentCommand( wcDgmSelect , CBN_SELCHANGE );
+    ctlParentCommandPost( wcDgmSelect , CBN_SELCHANGE );
 
     SetFocus( _CTL(wcEdtCmd) );
 

@@ -17,6 +17,10 @@ typedef enum {
 } ObjectClassID;
 #undef _DeclEnum
 
+typedef enum {
+    CM_GenerateCode = WM_USER+1
+} ClassHandlerCommand;
+
 #define _DeclAsArray( _Group , _xClassx , _Name , _Color ) { .bGroup = _Group , .pzName = _Name , .uColor = _Color },
 static ClassInterfaceStruct g_ClassInterface[] = {
     _ForEachBuiltinClassID( _DeclAsArray )

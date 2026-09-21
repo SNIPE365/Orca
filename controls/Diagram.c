@@ -13,6 +13,7 @@ typedef struct {
 } DiagramObjectStruct;
 
 typedef struct {
+    char zName[31], zZero;
     int iObjectCount;
     int iObjectMaxCount;
     DiagramObjectStruct** pObjects;
@@ -21,12 +22,15 @@ typedef struct {
     int iSelectedIdx;
 } DiagramFileStruct;
 
+DiagramFileStruct* g_ProjectFiles[256]; int g_ProjectFileCount = 0;
+
 typedef enum {
     DIM_BASE = WM_USER,
-    DIM_INSERT,
-    DIM_REMOVE,
-    DIM_SELECT,
-    DIM_TESTFILE,
+    DIM_INSERT,              //Insert a new object in current diagram
+    DIM_REMOVE,              //Remove the selected object from current diagram
+    DIM_SELECT,              //Change the view to a new diagram
+    DIM_GENERATE,            //Generate code for all diagrams
+    DIM_TESTFILE,            //Generate a test file module
     /* PRIVATE ONES */
     DIM_CREATE_BUFFER,
 } DiagramEnum;
@@ -67,7 +71,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     #include "../components/_basedecl.h"
 
-    DiagramFileStruct* CreateTestDiagram() {
+    DiagramFileStruct* CreateTestDiagram( char* pzName ) {
 
         //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
 
@@ -77,6 +81,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         pFile->iObjectMaxCount = _MaxAllocationGap;
         DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
         if (!ptOrder) { free(pFile); return NULL; }
+
+        //initialize file name
+        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
         int iPosY=10, iPosX=0 , iObjCount = 0;
         { //sample string
@@ -114,7 +121,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         //#undef aObject_Content
     }
-    DiagramFileStruct* CreateRandomTestDiagram() {
+    DiagramFileStruct* CreateRandomTestDiagram( char* pzName ) {
 
         //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
 
@@ -124,6 +131,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         pFile->iObjectMaxCount = _MaxAllocationGap;
         DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
         if (!ptOrder) { free(pFile); return NULL; }
+
+        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
         int iPosY=10, iObjCount = 0;
         for (int iN = 0 ; iN < _rnd(_MaxAllocationGap) ; iN++) {
@@ -166,6 +175,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return pFile;
 
         //#undef aObject_Content
+    }
+
+    void GenerateFullCode( int iFileCount , DiagramFileStruct** pFile ) {
+        char *pCode = malloc(65536*2); int iLen = 0;
+        if (pCode == NULL) return;
+        //list all files
+        for (int i=0 ; i < iFileCount ; i++ ) {
+            ConsolePrintf("File #%i = '%s'\n", i, pFile[i]->zName);
+            //list all objects in file
+            for (int j=0 ; j < pFile[i]->iObjectCount ; j++ ) {
+                ConsolePrintf("  Object #%i = '%s'\n", j, pFile[i]->pObjects[j]->zName);
+            }
+            //_with( pFile->)
+            //iLen += sprintf( pCode+iLen , "" , pFile->pFiles[i] );
+        }
+        free(pCode);
     }
 
     // ------------- Diagram functions -------------
@@ -284,7 +309,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
                 //tell object to draw itself
                 tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
-                g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , &tObjRc , WM_PAINT , 0 , 0 );
+                g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , WM_PAINT , 0 , (LPARAM)&tObjRc );
 
             } _endwith;
         }
@@ -611,8 +636,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return lRes;
             break;
         }
-        case DIM_TESTFILE: {       //wParam = IsRandom;
-            return (LRESULT) ((wParam) ? CreateRandomTestDiagram() : CreateTestDiagram());
+        case DIM_GENERATE: {       //wParam = FileCount // lParam = DiagramFileStruct**
+            GenerateFullCode( (int)wParam , (DiagramFileStruct**)lParam );
+            break;
+        }
+        case DIM_TESTFILE: {       //wParam = IsRandom // lParam = Name
+            return (LRESULT) ((wParam) ? CreateRandomTestDiagram( (char*)lParam ) : CreateTestDiagram( (char*)lParam ));
             break;
         }
         case WM_MOUSEWHEEL: {      //Mouse wheel event

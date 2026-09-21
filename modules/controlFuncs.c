@@ -26,10 +26,20 @@ inline LRESULT cbSetCurSel(int iID, int iIndex) {
 inline LRESULT cbGetCurSel(int iID) {
     return SendMessage(_CTL(iID), CB_GETCURSEL, 0, 0);
 }
+inline LRESULT cbSetEditSel( int iID, int ichStart, int ichEnd ) {
+    return SendMessage(_CTL(iID), CB_SETEDITSEL  , 0 , MAKELPARAM( ichStart, ichEnd ) );
+}
+inline LRESULT cbSelectString( int iID , int iIdxStart , LPCTSTR pzText) {
+    return SendMessage(_CTL(iID), CB_SELECTSTRING , iIdxStart , (LPARAM)pzText);
+}
+
 inline LRESULT cbGetItemData(int iID, int iIndex) {
     return SendMessage(_CTL(iID), CB_GETITEMDATA, (WPARAM)iIndex, 0);
 }
 
 inline LRESULT ctlParentCommand(int iID, int iCode) {
     return SendMessage( GetParent(_CTL(iID)), WM_COMMAND, MAKEWPARAM(iID,iCode), (LPARAM)_CTL(iID));
+}
+inline LRESULT ctlParentCommandPost(int iID, int iCode) {
+    return PostMessage( GetParent(_CTL(iID)), WM_COMMAND, MAKEWPARAM(iID,iCode), (LPARAM)_CTL(iID));
 }

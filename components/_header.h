@@ -24,11 +24,11 @@ static ClassGroupStruct g_atClassGroup[] = {
 };
 #undef _DeclAsArray
 
-#define _ClassPrototype void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam
+#define _ClassPrototype void* pObject , UINT message , WPARAM wParam , LPARAM lParam
 
 //////////////////////////////// Per Class Information ///////////////////////////////////
 typedef struct {
-    LRESULT (*pfHandlerProc)( void* pObject , RECT* pRc , UINT message , WPARAM wParam , LPARAM lParam );
+    LRESULT (*pfHandlerProc)( void* pObject , UINT message , WPARAM wParam , LPARAM lParam );
     char*    pzName;
     uint8_t  bGroup;
     COLORREF uColor;

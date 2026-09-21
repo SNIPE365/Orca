@@ -177,3 +177,5 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
 
     return length;
 }
+
+void ConsolePrintf(const char* format, ...);

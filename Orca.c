@@ -165,10 +165,16 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                     case CBN_SELCHANGE: {
                         puts("CBN_SELCHANGE");
                         SendMessage( _CTL(wcDiagram) , DIM_SELECT , 0 , (LPARAM)cbGetItemData(wID, cbGetCurSel(wID)) );
+                        cbSetEditSel( wcDgmFilter , -1 , 0 ); cbSetEditSel( wcDgmSelect , -1 , 0 );
+                        SetFocus( _CTL(wcDiagram) );
                     } break;
                 } break; } break;
                 case wcBtnBuild:  { switch (wNotifyCode) {
-                    case BN_CLICKED: { ProjectBuild(); break; }
+                    case BN_CLICKED: {
+                        SendMessage( _CTL(wcDiagram) , DIM_GENERATE , g_ProjectFileCount , (LPARAM)g_ProjectFiles );
+                        //ProjectBuild();
+                        break;
+                    }
                 } break; } break;
                 case wcEdtCmd:    { switch (wNotifyCode) {
                     case EN_CHANGE: {
