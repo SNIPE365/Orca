@@ -186,7 +186,7 @@ LRESULT wndCreate( HWND hwnd ) {
     #define _AddClassGroup( _Id, _Name ) if (_Id != cgrpInvalid) cbAddString( wcDgmFilter , _Name , _Id );
     _ForEachBuiltinClassGroup( _AddClassGroup );
     #undef _AddClassGroup
-    cbAddString( wcDgmSelect , "Test1" , (LPARAM)(g_ProjectFiles[g_ProjectFileCount++] = (void*)SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , (LPARAM)"Test1" ) ));
+    //cbAddString( wcDgmSelect , "Test1" , (LPARAM)(g_ProjectFiles[g_ProjectFileCount++] = (void*)SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 1 , (LPARAM)"Test1" ) ));
     iResu = cbAddString( wcDgmSelect , "Main" , (LPARAM)(g_ProjectFiles[g_ProjectFileCount++] = (void*)SendMessage( _CTL(wcDiagram) , DIM_TESTFILE , 0 , (LPARAM)"Main" ) ));
     cbSelectString( wcDgmFilter , 0 , "{global}" );
     SetFocus( _CTL(wcDgmSelect) );

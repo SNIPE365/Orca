@@ -1,3 +1,4 @@
+#include <specstrings.h>
 #define main_module Orca
 
 #define _GNU_SOURCE
@@ -143,6 +144,9 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             _const hwndCtl = (HWND)lparam;
             if (!hwndCtl) { wNotifyCode = ~wNotifyCode; }
             switch (wNotifyCode) {
+                case -2:
+                    g_CurItemID = wID;
+                    __fallthrough;
                 case -1:         { //Command from the menu
                     if (wID != g_CurItemID) { return 0; } //not valid menu event
                     MENUITEMINFO tItem = { sizeof(MENUITEMINFO) , MIIM_DATA | MIIM_STATE };
@@ -154,10 +158,6 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                     }
                     g_hCurMenu = NULL;
                     return g_CurItemID = 0; //break
-                }
-                case -2:         { //Accelerator
-                    //ProcessAccelerator( wID )
-                    return 0;
                 }
             } //switch (wNotifyCode)
             switch (wID) {
@@ -223,10 +223,17 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             //printf("%ix%i\n", g_tMain.iW , g_tMain.iH);
             break;
         }
+        case WM_INITMENUPOPUP: { //track newest menu handle
+            _const hMenu = (HMENU)wparam;
+            //printf("MenuI: %X\n",hMenu);
+            g_hCurMenu = hMenu;
+            break;
+        }
         case WM_MENUSELECT: { //track newest menu handle/item/state
             _const iID = (UINT)(LOWORD(wparam));
             _const fuFlags = (UINT)(HIWORD(wparam));
             _const hMenu = (HMENU)lparam;
+            //printf("MenuS: %X\n",hMenu);
             if (hMenu) { g_CurItemID = iID ; g_hCurMenu = hMenu; }
             return 0; //break;
         } //WM_MENUSELECT
@@ -297,6 +304,12 @@ int main() {
     Diagram_Init(g_APPINSTANCE);
     g_WndMenu = menu_CreateMainMenu();
 
+    HACCEL hAccel = menu_CreateAcceleratorTable();
+    if ( !hAccel ) {
+        MessageBoxA( NULL, "Failed to create accelerator table!", g_pzAppName, MB_ICONINFORMATION );
+        return 1;
+    }
+
     // Create the window and show it
     _const cStyleEx = 0; //WS_EX_COMPOSITED | WS_EX_LAYERED;
     _const cStyle   = (WS_TILEDWINDOW | WS_CLIPCHILDREN) & ~WS_THICKFRAME ;
@@ -330,6 +343,7 @@ int main() {
     #endif
 
     while( GetMessage( &wMsg, NULL, 0, 0 ) ) {
+        if ( TranslateAccelerator( hwnd , hAccel , &wMsg ) ) { continue; }
         //if (IsDialogMessage( hWnd ,@wMsg )) { continue; }
         if ( (wMsg.message == WM_MOUSEMOVE) && (wMsg.hwnd != hwnd) ) {
             SendMessage( hwnd , WM_NCMOUSEMOVE , HTCLIENT , 0 );
@@ -338,6 +352,7 @@ int main() {
         DispatchMessage( &wMsg );
     } //while
 
+    DestroyAcceleratorTable( hAccel );
     DestroyWindow( hwnd );
     return 0;
 

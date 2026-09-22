@@ -7,6 +7,7 @@
   _err( "Compile from " TOSTRING(main_module) ".c" )
 #endif
 
+// *********** Menu Definition ****************
 #define ForEachMenuEntry( __Entry , __SubMenu , __EndSubMenu , __Separator ) \
    __SubMenu( "&File" ) \
      /*__Entry( meFile_New      , "&New"              , _Ctrl        , VK_N , &File_New    ) \
@@ -18,42 +19,73 @@
       __Entry( meFile_Import  , "&Import"           , _Ctrl        , VK_I , &File_Import ) \
       __Entry( meFile_Export  , "&Export"           , _Ctrl+_Shift , VK_I , &File_Export ) \
      __Separator() */\
-     __Entry( meFile_Exit     , "&Quit" "\tAlt+F4"  , _Ctrl        , VK_Q , &File_Exit   ) \
+     __Entry( meFile_Exit     , "&Quit" "\tAlt+F4"  , _Ctrl        , VK(_Q) , &File_Exit   ) \
+   __EndSubMenu() \
+   __SubMenu( "&Project" ) \
+      __Entry( meProject_build     , "&Build"       , _Ctrl        , VK(_B)  , Project_Build   ) \
+      __Entry( meProject_Qbuild    , "&Quick Build" ,              , VK(_F6) , Project_Build   ) \
    __EndSubMenu() \
    __SubMenu( "*[" __TIMESTAMP__ "]" ) \
    __EndSubMenu()
    /*__SubMenu( "&Edit" ) \
       __Entry( meEdit_Undo    , "&Undo"  "\tCtrl+Z"  ,              ,      , &Edit_Undo ) \
-      __Entry( meEdit_Redo    , "&Redo"              , _Ctrl+_Shift , VK_Z , &Edit_Redo ) \
+      __Entry( meEdit_Redo    , "&Redo"              , _Ctrl+_Shift , VK(_Z) , &Edit_Redo ) \
       __Separator() \
-      __Entry( meEdit_Find    , "&Find"              , _Ctrl        , VK_F , &Edit_Find ) \
-      __Entry( meEdit_Replace , "Rep&lace"           , _Ctrl        , VK_H , &Edit_Replace ) \
+      __Entry( meEdit_Find    , "&Find"              , _Ctrl        , VK(_F) , &Edit_Find ) \
+      __Entry( meEdit_Replace , "Rep&lace"           , _Ctrl        , VK(_H) , &Edit_Replace ) \
       __Separator() \
-      __Entry( meEdit_SelAll  , "&Select All"        , _Ctrl        , VK_A , &Edit_SelectAll  ) \
+      __Entry( meEdit_SelAll  , "&Select All"        , _Ctrl        , VK(_A) , &Edit_SelectAll  ) \
       __Separator() \
       __Entry( meEdit_Cut     , "C&ut"   "\tCtrl+X"  ,              ,      , &Edit_Cut  ) \
       __Entry( meEdit_Copy    , "&Copy"  "\tCtrl+C"  ,              ,      , &Edit_Copy ) \
       __Entry( meEdit_Paste   , "&Paste" "\tCtrl+V"  ,              ,      , &Edit_Paste) \
       __Separator() \
-      __Entry( meCode_Build   , "&Build"             , 0            , VK_F6 , &Button_Compile ) \
-      __Entry( meCode_Clear   , "Cl&ear output"      , _Ctrl+_Shift , VK_B , &Code_ClearOutput ) \
+      __Entry( meCode_Build   , "&Build"             , 0            , VK(_F6) , &Button_Compile ) \
+      __Entry( meCode_Clear   , "Cl&ear output"      , _Ctrl+_Shift , VK(_B) , &Code_ClearOutput ) \
    __EndSubMenu()*/
 //-------------------------------------------------------------------------------------------
 
-#define _Shift FSHIFT
-#define _Ctrl  FCONTROL
-#define _Alt   FALT
-#define Dummy()
+#if 1 //key definitions
+    #define _Shift FSHIFT
+    #define _Ctrl  FCONTROL
+    #define _Alt   FALT
+    #define Dummy()
+    #define VK_A 'A'
+    #define VK_B 'B'
+    #define VK_C 'C'
+    #define VK_D 'D'
+    #define VK_E 'E'
+    #define VK_F 'F'
+    #define VK_G 'G'
+    #define VK_H 'H'
+    #define VK_I 'I'
+    #define VK_J 'J'
+    #define VK_K 'K'
+    #define VK_L 'L'
+    #define VK_M 'M'
+    #define VK_N 'N'
+    #define VK_O 'O'
+    #define VK_P 'P'
+    #define VK_Q 'Q'
+    #define VK_R 'R'
+    #define VK_S 'S'
+    #define VK_T 'T'
+    #define VK_U 'U'
+    #define VK_V 'V'
+    #define VK_W 'W'
+    #define VK_X 'X'
+    #define VK_Y 'Y'
+    #define VK_Z 'Z'
+#endif
+
 #define EnumEntry( _Name , _p... ) _Name,
 #define MayEnumEntry( _p... ) EnumEntry(_p)
 #define MayEnumSubMenu( _s , _name... ) _name
-
-typedef enum {
-  meFirst = 1000,
-  ForEachMenuEntry( MayEnumEntry , MayEnumSubMenu , Dummy , Dummy )
-  meLast
-} MenuEntries;
-
+    typedef enum {
+    meFirst = 1000,
+    ForEachMenuEntry( MayEnumEntry , MayEnumSubMenu , Dummy , Dummy )
+    meLast
+    } MenuEntries;
 #undef EnumEntry
 #undef MayEnumEntry
 #undef MayEnumSubMenu
@@ -73,7 +105,7 @@ static void* menu_AddSubMenu( void* hMenu , char* pzText , int iID /* = 0 */ ) {
     if ( ( hMenu==g_WndMenu ) && (_CTL(wcMain)) ) { DrawMenuBar( _CTL(wcMain) ); }
     return hResult;
 } // menu_AddSubMenu()
-static int menu_MenuAddEntry( void* hMenu , int iID /* = 0 */ , char* pzText /* = NULL */ , void* pEvent /* = NULL */ , int bState /* = 0 */ ) {
+static int menu_MenuAddEntry( void* hMenu , int iID /* = 0 */ , char* pzText /* = NULL */ , int iModifiers /* = 0 */ , int iAccelerator /* = 0 */ , void* pEvent /* = NULL */ , int bState /* = 0 */ ) {
     if (!IsMenu(hMenu)) { return -1; }
     MENUITEMINFOA tItem = { sizeof(MENUITEMINFO) };
     tItem.fMask      = MIIM_DATA | MIIM_ID | MIIM_STATE | MIIM_TYPE;
@@ -81,7 +113,22 @@ static int menu_MenuAddEntry( void* hMenu , int iID /* = 0 */ , char* pzText /* 
     tItem.fState     = bState & (~MFT_RADIOCHECK);
     tItem.wID        = iID;
     tItem.dwItemData = (LONG_PTR)pEvent;
-    if (pzText) { tItem.dwTypeData = pzText; } else { tItem.dwTypeData = NULL; }
+    if (pzText) {
+        char szText[256]; int iPos=0;
+        iPos = sprintf( szText , "%s" , pzText );
+        if (iAccelerator && (!strchr(pzText,'\t'))) {
+            szText[iPos++] = '\t';
+            int uScan = MapVirtualKey( iAccelerator , 0 ) << 16;
+            if (iModifiers & FCONTROL) { iPos += sprintf( szText + iPos , "Ctrl+" ); }
+            if (iModifiers & FSHIFT) { iPos += sprintf( szText + iPos , "Shift+" ); }
+            if (iModifiers & FALT) { iPos += sprintf( szText + iPos , "Alt+" ); }
+            //todo check if extended key flag is required?
+            GetKeyNameText( uScan , szText + iPos , 256 - iPos );
+        }
+        tItem.dwTypeData = szText;
+    } else {
+        tItem.dwTypeData = NULL;
+    }
     InsertMenuItemA( hMenu , 0xFFFFFFFF , true , &tItem );
     //DrawMenuBar( g_GfxWnd )
     return iID;
@@ -109,6 +156,36 @@ static void menu_Trigger( int iID ) {
   SendMessage( _CTL(wcMain) , WM_COMMAND , iID , 0 );
 } //menu_Trigger()
 
+static HACCEL menu_CreateAcceleratorTable(void) {
+    //generate a compile time array of atAccel using designed initializers
+    //each non used entry redefines index 0 to avoid unused array elements
+    #define _SubMenu( _sText... )
+    #define _EndSubMenu()
+    #define _Separator()
+    #define VK(_N) ((((__COUNTER__)-iStart))<<16)+VK##_N //Counter16|VK_16 trick
+        #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) [(_Accelerator+0)>>16] = {.fVirt=FVIRTKEY|_Modifiers+0,.key=((_Accelerator+0) & 0xFFFF),.cmd=_idName},
+
+    const int iStart = __COUNTER__;
+    ACCEL atAccel[] = { {0,0,0},
+        ForEachMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
+    };
+    /*
+    for (int i=1 ; i<_countof(atAccel) ; i++) {
+        _with( atAccel[i] );
+            printf("#%i:%i[%i] = %i(%c)\n", i, (int)w->cmd,(int)w->fVirt,(int)w->key,(int)w->key);
+        _endwith;
+    }
+    */
+
+    return CreateAcceleratorTable( atAccel+1 , _countof(atAccel)-1 );
+
+    #undef _SubMenu
+    #undef _EndSubMenu
+    #undef _Separator
+    #undef _Entry
+    #undef VK
+}
+
 static HMENU menu_CreateMainMenu(void) {
     #define _SubMenu( _sText... ) \
     { \
@@ -116,50 +193,23 @@ static HMENU menu_CreateMainMenu(void) {
 
     #define _EndSubMenu() }
     #define _Separator() menu_MenuAddEntry( hMenu , 0 , NULL , NULL , 0 );
-
-    /* advanced macro for auto accelerator
-    #if len(#_Accelerator)
-        #if (_Modifiers and _Shift)
-            #define _sShift "Shift+"
-        #else
-            #define _sShift
-        #endif
-        #if (_Modifiers and _Ctrl)
-            #define _sCtrl "Ctrl+"
-        #else
-            #define _sCtrl
-        #endif
-        #if (_Modifiers and _Alt)
-            #define _sAlt "Alt+"
-        #else
-            #define _sAlt
-        #endif
-        #if _Accelerator >= VK_F1 and _Accelerator <= VK_F24
-            #define _sKey "F" & (_Accelerator-((VK_F1)-1))
-        #elseif _Accelerator >= asc("A") and _Accelerator <= asc("Z")
-            #define _sKey +chr(_Accelerator)
-        #elseif _Accelerator >= asc("0") and _Accelerator <= asc("9")
-            #define _sKey +chr(_Accelerator)
-        #else
-            #define _sKey s##_Accelerator
-        #endif
-        _const _sText2 = _Text "\t" _sCtrl _sAlt _sShift _sKey ;
-        #undef _sCtrl
-        #undef _sAlt
-        #undef _sShift
-        #undef _sKey
-    #else
-    */
+    #define VK(_N) (VK##_N)
 
     #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) \
         { \
             _const _sText2 = _Text ; \
-            menu_MenuAddEntry( hMenu , _idName , _sText2 , _Callback+0 , 0 ); \
+            menu_MenuAddEntry( hMenu , _idName , _sText2 , _Modifiers+0 , _Accelerator+0 , _Callback+0 , 0 ); \
         }
 
     _auto hMenu = CreateMenu() ; g_WndMenu = hMenu;
 
     ForEachMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
+
+    #undef _SubMenu
+    #undef _EndSubMenu
+    #undef _Separator
+    #undef _Entry
+    #undef VK
 
     return hMenu;
 } //menu_CreateMainMenu()
