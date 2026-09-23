@@ -1,5 +1,7 @@
 // this is included as part of Diagram.c WndProc function for easy context sharing
 
+static char g_ScratchBuffer[65536];
+
 #include "string.c"
 #include "console.c"
 

@@ -4,6 +4,7 @@ typedef struct {
 } ClsStringStruct;
 
 LRESULT fnClsStringHandler( _ClassPrototype ) {
+    DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
     _with( *(ClsStringStruct*)pObject ) {
         switch (message) {
             case WM_PAINT: {
@@ -13,10 +14,14 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 DrawText( hdc , w->zContent , w->iLength , pRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
                 break;
             }
-            case CM_GenerateCode:
-                printf( "'%i' = '%s'\n" , sizeof(DiagramObjectStruct) , w->zContent );
-                //w->zName
-                return 0;
+            case CM_GenerateCode: { //wParam = BufferRemaining // lParam = (char*)Buffer
+                #define emitf(...) iLen += sprintf( pBuffer+iLen , "  " __VA_ARGS__ )
+                char* pBuffer = (char*)lParam; int32_t iBufSz = (int32_t)wParam, iLen=0;
+                emitf( "char* %s = \"%s\";\r\n" , pDiagram->zName , w->zContent );
+                strcpy( g_ScratchBuffer , pDiagram->zName );
+                return iLen;
+                #undef emitf
+            }
             default:
                 break;
         }

@@ -157,33 +157,48 @@ static void menu_Trigger( int iID ) {
 } //menu_Trigger()
 
 static HACCEL menu_CreateAcceleratorTable(void) {
-    //generate a compile time array of atAccel using designed initializers
-    //each non used entry redefines index 0 to avoid unused array elements
+
+    //generate a compile time array of atAccel depending on the menu entries
+    //if accelerator is empty, the entry is skipped otherwise _MenuAcc##_Accelerator is used
+    //which leads to _MenuRowGen1() writing the code or _MenuRowGen0() skipping it
+    //if anything other than VK(...) is used in the accelerator entry this will fail
+    //
     #define _SubMenu( _sText... )
     #define _EndSubMenu()
     #define _Separator()
-    #define VK(_N) ((((__COUNTER__)-iStart))<<16)+VK##_N //Counter16|VK_16 trick
-        #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) [(_Accelerator+0)>>16] = {.fVirt=FVIRTKEY|_Modifiers+0,.key=((_Accelerator+0) & 0xFFFF),.cmd=_idName},
+    #define _MenuWrap(...) _MenuRow(__VA_ARGS__)
+    #define _MenuAcc 0,0            //when accelerator is empty
+    #define _MenuAccVK(_N) 1,VK##_N //when accelerator is VK(_N)
+    #define _MenuRow( _fVirt , _valid , _key , _cmd ) _MenuRowGen##_valid( _fVirt , _key , _cmd )
+    #define _MenuRowGen1( _fVirt , _key , _cmd ) {.fVirt=_fVirt,.key=_key,.cmd=_cmd},
+    #define _MenuRowGen0( _fVirt , _key , _cmd ) /* skipped */
+    #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) \
+        _MenuWrap( FVIRTKEY|_Modifiers+0 , _MenuAcc##_Accelerator , _idName )
 
-    const int iStart = __COUNTER__;
-    ACCEL atAccel[] = { {0,0,0},
+    ACCEL atAccel[] = {
         ForEachMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
     };
+
     /*
-    for (int i=1 ; i<_countof(atAccel) ; i++) {
-        _with( atAccel[i] );
-            printf("#%i:%i[%i] = %i(%c)\n", i, (int)w->cmd,(int)w->fVirt,(int)w->key,(int)w->key);
-        _endwith;
-    }
+        for (int i=0 ; i<_countof(atAccel) ; i++) {
+            _with( atAccel[i] );
+                printf("#%i:%i[%i] = %i(%c)\n", i, (int)w->cmd,(int)w->fVirt,(int)w->key,(int)w->key);
+            _endwith;
+        }
     */
 
-    return CreateAcceleratorTable( atAccel+1 , _countof(atAccel)-1 );
+    return CreateAcceleratorTable( atAccel , _countof(atAccel) );
 
     #undef _SubMenu
     #undef _EndSubMenu
     #undef _Separator
     #undef _Entry
-    #undef VK
+    #undef _MenuAcc
+    #undef _MenuAccVK
+    #undef _MenuRow
+    #undef _MenuRowGen1
+    #undef _MenuRowGen0
+    #undef _MenuWrap
 }
 
 static HMENU menu_CreateMainMenu(void) {

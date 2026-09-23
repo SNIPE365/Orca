@@ -7,6 +7,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <stdint.h>
+#include <time.h>
 #include <stdbool.h>
 #include <windows.h>
 #include <commctrl.h>
@@ -105,7 +106,7 @@ static int ProjectBuild() {
 
     { //test compile faillure
         DWORD dwResu;
-        _const pzFile = "file";
+        _const pzFile = "temp";
         asprintf( &pzFileIn  , "%s.c" , pzFile ); //cleanup at end
         asprintf( &pzFileExt , "%s.exe" , pzFile ); //cleanup at end
 
@@ -171,8 +172,16 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
                 } break; } break;
                 case wcBtnBuild:  { switch (wNotifyCode) {
                     case BN_CLICKED: {
+                        //SendMessage( _CTL(wcEdtConsole) , WM_SETREDRAW , 0 , 0 );
+                        { //scope to not keep that 256 byte char alive during whole compilation
+                            time_t rawtime; struct tm *tnow; char zText[256];
+                            time(&rawtime); tnow = localtime(&rawtime);
+                            sprintf(zText+strftime(zText,256,"%H:%M:%S",tnow),"%s\n", ": Building Started...");
+                            SetWindowText(_CTL(wcEdtConsole),zText);
+                        }
                         SendMessage( _CTL(wcDiagram) , DIM_GENERATE , g_ProjectFileCount , (LPARAM)g_ProjectFiles );
-                        //ProjectBuild();
+                        ProjectBuild();
+                        //SendMessage( _CTL(wcEdtConsole) , WM_SETREDRAW , 1 , 0 );
                         break;
                     }
                 } break; } break;

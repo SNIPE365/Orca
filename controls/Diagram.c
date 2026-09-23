@@ -178,19 +178,55 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     void GenerateFullCode( int iFileCount , DiagramFileStruct** pFile ) {
-        char *pCode = malloc(65536*2); int iLen = 0;
-        if (pCode == NULL) return;
-        //list all files
+        #define emitf(...) iLen += sprintf( pCode+iLen , __VA_ARGS__ )
+        _const cMaxBlockSize = 65536;
+        char *pCodeBlocks[1024] = {malloc(cMaxBlockSize*2)}, *pCode = pCodeBlocks[0];
+        int iLen = 0, iBlockCount = 0;
+        if (pCode == NULL) return; pCode[0] = 0;
+        emitf( "#include <stdio.h>\r\n" );
+        emitf( "#include <stdlib.h>\r\n" );
+        //emit one function per file/module
         for (int i=0 ; i < iFileCount ; i++ ) {
             ConsolePrintf("File #%i = '%s'\n", i, pFile[i]->zName);
+            emitf( "int %s() {\r\n" , pFile[i]->zName );
             //list all objects in file
             for (int j=0 ; j < pFile[i]->iObjectCount ; j++ ) {
-                ConsolePrintf("  Object #%i = '%s'\n", j, pFile[i]->pObjects[j]->zName);
+                _with(*pFile[i]->pObjects[j]) {
+                    ConsolePrintf("  Object #%i = '%s'\n", j, w->zName); /*ClassInterfaceStruct*/
+                    //tell the class handler to generate code for this object
+                    iLen += g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , CM_GenerateCode , cMaxBlockSize , (LPARAM)(pCode+iLen) );
+                    if (iLen >= cMaxBlockSize) {
+                        pCodeBlocks[iBlockCount++] = realloc(pCode, iLen);
+                        pCodeBlocks[iBlockCount] = malloc(cMaxBlockSize*2);
+                        pCode = pCodeBlocks[iBlockCount]; iLen = 0; pCode[0] = 0;
+                    }
+                } _endwith
             }
-            //_with( pFile->)
-            //iLen += sprintf( pCode+iLen , "" , pFile->pFiles[i] );
+            emitf("}\r\n" );
         }
-        free(pCode);
+        //emit main function
+        if (iFileCount) {
+            emitf(
+                "int main() {\r\n"
+                "  %s();\r\n"
+                "  getchar();\r\n"
+                "  return 0;\r\n"
+                "}\r\n"
+                ,pFile[0]->zName
+            );
+        }
+
+        ConsolePrintf( "%s" , "----------------------------------\r\n" );
+        FILE* pFileOut = fopen("temp.c", "wb");
+        for (int i=0 ; i <= iBlockCount ; i++ ) {
+            ConsolePrintf( "%s" , pCodeBlocks[i] );
+            fprintf(pFileOut, "%s", pCodeBlocks[i]);
+            free(pCodeBlocks[i]); pCodeBlocks[i] = NULL;
+        }
+        fclose(pFileOut);
+        iBlockCount = 0;
+
+        #undef emitf
     }
 
     // ------------- Diagram functions -------------
