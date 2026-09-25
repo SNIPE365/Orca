@@ -22,6 +22,9 @@ LRESULT fnClsStdoutHandler( _ClassPrototype ) {
                 return iLen;
                 #undef emitf
             }
+            case CM_BeginEdit:
+            case CM_EndEdit:
+                break;
             default:
                 break;
         }

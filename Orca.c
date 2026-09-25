@@ -230,6 +230,9 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             wndResize( hwnd );
             //puts("Size changed?");
             //printf("%ix%i\n", g_tMain.iW , g_tMain.iH);
+            cbSetEditSel( wcDgmFilter , -1 , 0 ); cbSetEditSel( wcDgmSelect , -1 , 0 );
+            SetFocus( _CTL(wcDiagram) );
+
             break;
         }
         case WM_INITMENUPOPUP: { //track newest menu handle

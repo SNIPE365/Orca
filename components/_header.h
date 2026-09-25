@@ -31,6 +31,7 @@ typedef struct {
     LRESULT (*pfHandlerProc)( void* pObject , UINT message , WPARAM wParam , LPARAM lParam );
     char*    pzName;
     uint8_t  bGroup;
+    uint8_t  bInPins, bOutPins, bExecPins;
     COLORREF uColor;
 } ClassInterfaceStruct;
 ////////////////////////////////////////////////////////////////////////////////////////////////

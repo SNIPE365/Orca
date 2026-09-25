@@ -42,7 +42,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     } DiagramTimers;
 
     static HBITMAP hBmBuffer;
-    static HFONT hCtlFont,hSmallFont,hSmallFontB;
+    static HFONT hCtlFont,hSmallFont,hSmallFontB,hSymFont;
     static HDC hDcBuffer;
     static int iBufWid,iBufHei;
     static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;
@@ -85,15 +85,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //initialize file name
         strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
-        int iPosY=10, iPosX=0 , iObjCount = 0;
+        int iPosY=8, iPosX=0 , iObjCount = 0;
         { //sample string
             ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
             _with( aObject(iObjCount) ) {
-                w->iX = 10          ; w->iW = 128;
+                w->iX = 8           ; w->iW = 128;
                 w->iY = iPosY       ; w->iH = 48;
                 w->iClassID = idClsString;
                 strncpy( w->zName , "MyString" , _countof(w->zName) );
-                iPosY += w->iH+8;
+                iPosY += w->iH+24;
             } _endwith;
             _with( aObject_Content(iObjCount,ClsStringStruct) ) {
                 w->iLength = 11; w->iBuffer = 12;
@@ -104,7 +104,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         { //sample device
             ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
             _with( aObject(iObjCount) ) {
-                w->iX = 10          ; w->iW = 128;
+                w->iX = 8           ; w->iW = 128;
                 w->iY = iPosY       ; w->iH = 48;
                 w->iClassID = idClsStdout;
                 strncpy( w->zName , "STDOUT" , _countof(w->zName) );
@@ -288,7 +288,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             } _endwith;
         }
 
-        int iIndex;
+        int iIndex, iFontHeight, iFontWidth;
+        SelectObject( hDcBuffer , hSymFont );
+        {
+            SIZE tFontSz;
+            GetTextExtentPoint32( hDcBuffer , "AWI" , 1 , &tFontSz );
+            iFontWidth = tFontSz.cx/3; iFontHeight = tFontSz.cy;
+        }
+
+
         for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
             if (iIndex < (iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
@@ -306,9 +314,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //draw connection
                 if (iIndex < (iObjCount-1)) {
                     int iXX, iYY;
-                    const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH);
+                    const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH)+iFontHeight/2;
                     _with( aObject(iIndex+1) ) {
-                        iXX = w->iX-iViewX+w->iW/2; iYY = w->iY-iViewY;
+                        iXX = w->iX-iViewX+w->iW/2; iYY = w->iY-iViewY-(iFontHeight*2)/5;
                     } _endwith;
                     for (int iN=0; iN<3; iN++) {
                         const int iOX = (iN & 1), iOY = (iN/2);
@@ -336,12 +344,41 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     SelectObject( hdc , hOldPen ); SelectObject( hdc , hOldBrush );
                 }
 
-                int iBorderUD = (tObjRc.bottom-tObjRc.top)/4;
+                int iWid=tObjRc.right-tObjRc.left, iHei=tObjRc.bottom-tObjRc.top;
+                int iBorderUD = (iHei)/4;
                 tObjRc.bottom -= 4;
                 SelectObject( hDcBuffer , hSmallFont );
                 DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
                 SelectObject( hDcBuffer , hSmallFontB );
                 DrawText( hdc , g_ClassInterface[w->iClassID].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
+
+                SelectObject( hDcBuffer , hSymFont );
+                { // draw input pins
+                    SetTextColor( hDcBuffer , RGB( 128 , 0 , 0 ) );
+                    SetTextAlign( hDcBuffer , TA_CENTER |TA_BOTTOM );
+                    int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iPinSpace = (iWid)/(iPinCnt+1);
+                    for (int i=iPinSpace+(iFontWidth/4) ; iPinCnt-- ; i += iPinSpace) {
+                        TextOut( hdc , tObjRc.left+i , tObjRc.top+iFontHeight/4 , "\x88" , 1 );
+                    }
+                }
+                { // draw output pins
+                    SetTextColor( hDcBuffer , RGB( 0 , 128 , 0 ) );
+                    SetTextAlign( hDcBuffer , TA_CENTER |TA_TOP );
+                    int iPinCnt=g_ClassInterface[w->iClassID].bOutPins, iPinSpace = (iWid)/(iPinCnt+1);
+                    for (int i=iPinSpace ; iPinCnt-- ; i += iPinSpace) {
+                        TextOut( hdc , tObjRc.left+i , tObjRc.bottom , "\x98" , 1 ); //-iFontHeight/4
+                    }
+                }
+                { // draw exec pins
+                    SetTextColor( hDcBuffer , RGB( 0 , 0 , 128 ) );
+                    SetTextAlign( hDcBuffer , TA_LEFT );
+                    int iPinCnt=g_ClassInterface[w->iClassID].bExecPins, iPinSpace = (iHei)/(iPinCnt+1);
+                    for (int i=iPinSpace-iFontHeight/2 ; iPinCnt-- ; i += iPinSpace) {
+                        TextOut( hdc , tObjRc.right-2 , tObjRc.top+i , "\xB2" , 1 ); //-iFontHeight/4
+                    }
+                }
+                SetTextAlign( hDcBuffer , TA_LEFT );
+                SetTextColor( hDcBuffer , RGB( 0 , 0 , 0 ) );
 
                 //tell object to draw itself
                 tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
@@ -716,11 +753,17 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             hCtlFont = (HFONT)wParam; SetUpdate();
             //SelectObject( hDcBuffer , hCtlFont );
             LOGFONT tFont; GetObject( hCtlFont , sizeof(tFont) , &tFont );
+            int iFontHeight = tFont.lfHeight, iFontWidth = tFont.lfWidth;
             tFont.lfHeight = (tFont.lfHeight*2)/3;
             tFont.lfWidth  = (tFont.lfWidth *2)/3;
             hSmallFont = CreateFontIndirect( &tFont );
             tFont.lfWeight = FW_BOLD;
             hSmallFontB = CreateFontIndirect( &tFont );
+            tFont.lfHeight = iFontHeight; tFont.lfWidth  = iFontWidth;
+            tFont.lfWeight = FW_NORMAL;
+            strcpy(tFont.lfFaceName,"Wingdings 3");
+            hSymFont = CreateFontIndirect( &tFont );
+
             return 0;
         }
         case WM_GETFONT: {         //Retrieve Current Font
@@ -751,17 +794,30 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_LBUTTONDOWN: {     //Button pressed
             SetFocus(hwnd);
             int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
+            static uint32_t iPrevTime;
+            uint32_t iElasped = GetMessageTime()-iPrevTime;
+            iPrevTime = GetMessageTime();
             //printf("%i to %i\n",iStartIdx,iEndIdx);
             for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
                 _with( aObject(iIndex) ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
                     const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) };
                     if (PtInRect( &tRc , pt )) {
-                        printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
-                        iSelectedIndex = iIndex ; break ;
+                        iSelectedIndex = iIndex;
+                        if (iOldSel != iIndex) {
+                            printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
+                        } else {
+                            if (iElasped<500) {
+                                printf("Double-clicked %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                                iPrevTime -= 500;
+                            }
+                            return 0;
+                        }
+                        break ;
                     }
                 } _endwith;
             }
+
             if (iOldSel != iSelectedIndex) { SetUpdate(); }
 
             //start of the dragging position

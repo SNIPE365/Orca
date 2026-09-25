@@ -22,6 +22,20 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 return iLen;
                 #undef emitf
             }
+            case CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINT)ptClick
+                HANDLE hCtlEdit = (HANDLE)wParam;
+                POINT ptClick = *(POINT*)&lParam;
+                RECT tRect; GetClientRect( hCtlEdit , &tRect );
+                SetWindowText( hCtlEdit , w->zContent );
+                SendMessage( hCtlEdit , EM_SETSEL , 0 , -1 );
+            }
+            case CM_EndEdit:   { //wParam = hCtlEdit // lParam = (void**)pObject
+                HANDLE hCtlEdit = (HANDLE)wParam;
+                void** ppObject = (void**)lParam;
+                int32_t iLength = GetWindowTextLength( hCtlEdit );
+                pObject = objReallocContent( ppObject , sizeof(*pObject)+iLength+1 );
+                GetWindowText( hCtlEdit , w->zContent , iLength+1 );
+            }
             default:
                 break;
         }
