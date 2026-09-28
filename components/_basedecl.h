@@ -8,8 +8,11 @@ static char g_ScratchBuffer[65536];
 // that is passed to resize the object using this function
 void* objReallocContent( void** pObject , uint32_t iLength ) {
     _auto pObj = (DiagramObjectStruct**)pObject;
-    *pObj = realloc( *pObj , sizeof(*pObj)+iLength );
-    return *pObj;
+    size_t uSize = sizeof(**pObj)+iLength;
+    _auto p = *pObj;
+    *pObj = realloc( *pObj , uSize+16 );
+    printf("%p -> %p(%i)\n" , p, *pObj, uSize);
+    return ((*pObj)->Content);
 }
 
 #include "string.c"

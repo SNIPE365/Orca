@@ -68,6 +68,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
+    static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
 
     #include "../components/_basedecl.h"
 
@@ -345,8 +346,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 }
 
                 int iWid=tObjRc.right-tObjRc.left, iHei=tObjRc.bottom-tObjRc.top;
-                int iBorderUD = (iHei)/4;
-                tObjRc.bottom -= 4;
+                int iBorderUD = (iHei)/4; tObjRc.bottom -= 4;
                 SelectObject( hDcBuffer , hSmallFont );
                 DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
                 SelectObject( hDcBuffer , hSmallFontB );
@@ -382,6 +382,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
                 //tell object to draw itself
                 tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
+                //if (iIndex==0) printf("(draw) content=%p\n", w->Content);
                 g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , WM_PAINT , 0 , (LPARAM)&tObjRc );
 
             } _endwith;
@@ -494,6 +495,27 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         SetUpdate();
         return 1;
+    }
+    void BeginEndEdit( int iIndex /* =0 */ , const RECT* pRC /* = NULL */ ) {
+        if (pRC && !hwndEdit) {
+            const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
+            const int iTop = (pRC->top+2)+iBorderUD, iBottom = pRC->bottom-(iBorderUD+2);
+            _with( *pRC ) {
+                _const cStyle = WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
+                hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
+            } _endwith;
+            //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
+            LPARAM const tClick = GetMessagePos(); ppEditObj = ptOrder+iIndex;
+            //DiagramObjectStruct* pTemp = *ppEditObj; printf("%p = %p\n",pTemp->Content, w->Content);
+            g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
+            SetFocus( hwndEdit );
+        } else {
+            if (hwndEdit) {
+                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_EndEdit , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
+                DestroyWindow( hwndEdit ); hwndEdit = NULL; ppEditObj = NULL;
+                SetUpdate();
+            }
+        }
     }
 
     // ------------- Message dispatch --------------
@@ -794,9 +816,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_LBUTTONDOWN: {     //Button pressed
             SetFocus(hwnd);
             int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
-            static uint32_t iPrevTime;
-            uint32_t iElasped = GetMessageTime()-iPrevTime;
-            iPrevTime = GetMessageTime();
+            static uint32_t iPrevTime=0;
+            uint32_t iElapsed = GetMessageTime(); //printf("%i\n",iElapsed);
+            iElapsed -= iPrevTime; iPrevTime = GetMessageTime();
             //printf("%i to %i\n",iStartIdx,iEndIdx);
             for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
                 _with( aObject(iIndex) ) {
@@ -807,11 +829,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         if (iOldSel != iIndex) {
                             printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
                         } else {
-                            if (iElasped<500) {
+                            if (iElapsed<300) {
+                                iPrevTime -= 300;
                                 printf("Double-clicked %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                                iPrevTime -= 500;
-                            }
-                            return 0;
+                                BeginEndEdit( iSelectedIndex , &tRc );                            }
+                            //return 0;
                         }
                         break ;
                     }
@@ -837,6 +859,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_SETFOCUS: {        //Got Focus
           SetUpdate();
           return 0;
+        }
+        case WM_COMMAND: {         //Notification/Command from edit control
+            int iCode = HIWORD(wParam);      // notification code
+            HWND hCtl = (HWND) lParam;      // handle of edit control
+            if (hwndEdit && hCtl==hwndEdit) {
+                if (iCode == EN_KILLFOCUS) { BeginEndEdit(0,NULL); }
+            }
+            return 0;
         }
     }
 

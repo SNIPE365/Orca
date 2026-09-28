@@ -5,7 +5,7 @@ typedef struct {
 
 LRESULT fnClsStringHandler( _ClassPrototype ) {
     DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
-    _with( *(ClsStringStruct*)pObject ) {
+    _with( *(ClsStringStruct*)pObject; ) {
         switch (message) {
             case WM_PAINT: {
                 HDC hdc = hDcBuffer;
@@ -22,19 +22,22 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 return iLen;
                 #undef emitf
             }
-            case CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINT)ptClick
+            case CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)ptClick
                 HANDLE hCtlEdit = (HANDLE)wParam;
-                POINT ptClick = *(POINT*)&lParam;
+                POINTS ptClick = *(POINTS*)&lParam;
                 RECT tRect; GetClientRect( hCtlEdit , &tRect );
                 SetWindowText( hCtlEdit , w->zContent );
-                SendMessage( hCtlEdit , EM_SETSEL , 0 , -1 );
+                SendMessage( hCtlEdit , EM_SETSEL , -2 , -2 );
+                break;
             }
             case CM_EndEdit:   { //wParam = hCtlEdit // lParam = (void**)pObject
                 HANDLE hCtlEdit = (HANDLE)wParam;
                 void** ppObject = (void**)lParam;
                 int32_t iLength = GetWindowTextLength( hCtlEdit );
-                pObject = objReallocContent( ppObject , sizeof(*pObject)+iLength+1 );
-                GetWindowText( hCtlEdit , w->zContent , iLength+1 );
+                typeof(w) pw = objReallocContent( ppObject , sizeof(*pObject)+iLength+1 );
+                pw->iLength = iLength; pw->iBuffer = iLength+1;
+                GetWindowText( hCtlEdit , pw->zContent , pw->iBuffer );
+                break;
             }
             default:
                 break;

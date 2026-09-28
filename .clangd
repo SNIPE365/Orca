@@ -1,0 +1,13 @@
+CompileFlags:
+  Compiler: gcc.exe
+
+---
+# Apply force-include to all .c files EXCEPT orca.c
+If:
+  PathMatch: .*\.c$
+  PathExclude: .*orca\.c$
+
+CompileFlags:
+  Add:
+    - "-include"
+    - "orca.c"

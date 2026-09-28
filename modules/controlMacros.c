@@ -1,4 +1,5 @@
 #include "controlFuncs.c"
+#include <windows.h>
 
 if (_CTL(wcMain)) { return 0; }
 _CTL(wcMain) = hwnd;
@@ -15,7 +16,7 @@ _const cLabelStyle = cStyle;
 _const cEdtStyle = cStyle | ES_AUTOHSCROLL;
 _const cTxtStyle = cStyle | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL | ES_MULTILINE;
 _const cPanelStyle = cStyle | WS_VSCROLL | LBS_NOINTEGRALHEIGHT;
-_const cCodeStyle = cStyle | WS_HSCROLL | WS_VSCROLL;
+_const cCodeStyle = cStyle | WS_HSCROLL | WS_VSCROLL | WS_CLIPCHILDREN;
 _const cComboStyle = cStyle | CBS_DROPDOWN | CBS_SORT;
 _const cTreeStyle = cStyle | WS_VSCROLL | TVS_DISABLEDRAGDROP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS;
 _const cBrd = WS_EX_CLIENTEDGE;
