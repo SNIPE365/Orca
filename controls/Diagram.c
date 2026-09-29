@@ -69,6 +69,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
+    static void* hwndOrgProc = NULL;
 
     #include "../components/_basedecl.h"
 
@@ -313,23 +314,25 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }
 
                 //draw connection
-                if (iIndex < (iObjCount-1)) {
-                    int iXX, iYY;
+                if ((iIndex < (iObjCount-1)) && g_ClassInterface[w->iClassID].bOutPins) {
+                    int iXX, iYY, bInPins;
                     const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH)+iFontHeight/2;
                     _with( aObject(iIndex+1) ) {
                         iXX = w->iX-iViewX+w->iW/2; iYY = w->iY-iViewY-(iFontHeight*2)/5;
+                        bInPins = g_ClassInterface[w->iClassID].bInPins;
                     } _endwith;
-                    for (int iN=0; iN<3; iN++) {
-                        const int iOX = (iN & 1), iOY = (iN/2);
-                        const POINT atBezier[] = {
-                            {iOX+iX         , iOY+iY} ,
-                            {iOX+iX         , iOY+iYY} ,
-                            {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
-                            {iOX+iXX        , iOY+iYY}
-                        };
-                        PolyBezier( hdc , atBezier , 4 );
-                     }
-                    //MoveToEx( hdc , iPosX , iPosY , NULL ); LineTo( hdc , iPosXX , iPosYY );
+                    if (bInPins) {
+                        for (int iN=0; iN<3; iN++) {
+                            const int iOX = (iN & 1), iOY = (iN/2);
+                            const POINT atBezier[] = {
+                                {iOX+iX         , iOY+iY} ,
+                                {iOX+iX         , iOY+iYY} ,
+                                {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
+                                {iOX+iXX        , iOY+iYY}
+                            };
+                            PolyBezier( hdc , atBezier , 4 );
+                        }
+                    }
                 }
 
                 //render object
@@ -420,15 +423,32 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             } _endwith;
         }
 
+        /*
+        ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
+        _with( aObject(iObjCount) ) {
+            w->iX = 8           ; w->iW = 128;
+            w->iY = iPosY       ; w->iH = 48;
+            w->iClassID = idClsString;
+            strncpy( w->zName , "MyString" , _countof(w->zName) );
+            iPosY += w->iH+24;
+        } _endwith;
+        _with( aObject_Content(iObjCount,ClsStringStruct) ) {
+            w->iLength = 11; w->iBuffer = 12;
+            strcpy( w->zContent , "Hello World" );
+        } _endwith;
+        iObjCount++;
+        */
+
         //initialize new slot
-        ptOrder[iNew] = malloc( sizeof(**ptOrder) );
+        ptOrder[iNew] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
         _with( aObject(iNew) ) {
-            w->iX = iPosX;
-            w->iW = (48+(rand() % 120)) & (~7);
-            w->iY = iPosY;
-            w->iH = (32+(rand() % 64)) & (~7);
-            //w->bColor = rand() % 6;
-            //sprintf(w->zName , "Obj%i", iObjTotal+1 );
+            w->iX = iPosX; w->iW = (48+(rand() % 120)) & (~7);
+            w->iY = iPosY; w->iH = (32+(rand() % 64)) & (~7);
+            w->iClassID = idClsString;
+            sprintf(w->zName , "Obj%i", iObjTotal+1 );
+            _with( aObject_Content(iNew,ClsStringStruct) ) {
+                w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
+            } _endwith;
             if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
@@ -496,25 +516,54 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetUpdate();
         return 1;
     }
+    LRESULT CALLBACK CtlEditProc( HWND hwnd , UINT uMsg , WPARAM wParam , LPARAM lParam ) {
+        if ((uMsg == WM_KEYDOWN)) {
+            int iID=0;
+            if (wParam == VK_ESCAPE) { iID=1 ; wParam=VK_RETURN; }
+            if (wParam == VK_RETURN) {
+                return SendMessage( GetParent( hwnd ) , WM_COMMAND , MAKEWPARAM(iID,EN_KILLFOCUS) , (LPARAM)hwnd );
+            }
+        }
+        return CallWindowProc( hwndOrgProc , hwnd , uMsg , wParam , lParam );
+    }
     void BeginEndEdit( int iIndex /* =0 */ , const RECT* pRC /* = NULL */ ) {
         if (pRC && !hwndEdit) {
             const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
             const int iTop = (pRC->top+2)+iBorderUD, iBottom = pRC->bottom-(iBorderUD+2);
             _with( *pRC ) {
-                _const cStyle = WS_VISIBLE | WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
+                _const cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
                 hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
             } _endwith;
             //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
             LPARAM const tClick = GetMessagePos(); ppEditObj = ptOrder+iIndex;
             //DiagramObjectStruct* pTemp = *ppEditObj; printf("%p = %p\n",pTemp->Content, w->Content);
-            g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
-            SetFocus( hwndEdit );
+            const _auto bProceed = g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
+            if (!bProceed) { DestroyWindow( hwndEdit ); hwndEdit = NULL ; ppEditObj = NULL; return; }
+            hwndOrgProc = (void*)SetWindowLongPtr( hwndEdit , GWLP_WNDPROC , (LONG_PTR)CtlEditProc );
+            SendMessage( hwndEdit , WM_SETFONT , (WPARAM)hCtlFont , 0);
+            ShowWindow( hwndEdit , SW_SHOW ); SetFocus( hwndEdit );
         } else {
             if (hwndEdit) {
-                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_EndEdit , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
-                DestroyWindow( hwndEdit ); hwndEdit = NULL; ppEditObj = NULL;
-                SetUpdate();
+                int iEndOrCancel = iIndex ? CM_CancelEdit : CM_EndEdit;
+                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , iEndOrCancel , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
+                HWND hwndTemp = hwndEdit; hwndEdit = NULL ; ppEditObj = NULL;
+                DestroyWindow( hwndTemp ); SetUpdate();
             }
+        }
+    }
+    void WriteBackObject() { //save current diagram state back into the file structure
+        if (pDiagram) {
+            _with( *pDiagram ) {
+                w->pObjects = ptOrder;
+                w->iObjectCount = iObjCount;
+                w->iObjectMaxCount = iObjMaxCount;
+                ///update view cache
+                w->iViewX = iViewX;
+                w->iViewY = iViewY;
+                w->iSelectedIdx = iSelectedIndex;
+                //GetScrollInfo( hwnd , SB_HORZ , &tInfo); w->iPosH = tInfo.nPos;
+                //GetScrollInfo( hwnd , SB_VERT , &tInfo); w->iPosV = tInfo.nPos;
+            } _endwith
         }
     }
 
@@ -699,20 +748,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case DIM_SELECT: {         //lParam = DiagramFileStruct*
             LRESULT lRes = (LRESULT)pDiagram;
             SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
-            if (pDiagram) {
-                //save current diagram state back into the file structure
-                _with( *pDiagram ) {
-                    w->pObjects = ptOrder;
-                    w->iObjectCount = iObjCount;
-                    w->iObjectMaxCount = iObjMaxCount;
-                    ///update view cache
-                    w->iViewX = iViewX;
-                    w->iViewY = iViewY;
-                    w->iSelectedIdx = iSelectedIndex;
-                    //GetScrollInfo( hwnd , SB_HORZ , &tInfo); w->iPosH = tInfo.nPos;
-                    //GetScrollInfo( hwnd , SB_VERT , &tInfo); w->iPosV = tInfo.nPos;
-                } _endwith
-            }
+            WriteBackObject();
             pDiagram = (DiagramFileStruct*)lParam;
             //update current diagram state from the new file structure
             _with( *pDiagram ) {
@@ -732,6 +768,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             break;
         }
         case DIM_GENERATE: {       //wParam = FileCount // lParam = DiagramFileStruct**
+            WriteBackObject();
             GenerateFullCode( (int)wParam , (DiagramFileStruct**)lParam );
             break;
         }
@@ -861,10 +898,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
           return 0;
         }
         case WM_COMMAND: {         //Notification/Command from edit control
+            int iID = LOWORD(wParam);         // control ID
             int iCode = HIWORD(wParam);      // notification code
             HWND hCtl = (HWND) lParam;      // handle of edit control
             if (hwndEdit && hCtl==hwndEdit) {
-                if (iCode == EN_KILLFOCUS) { BeginEndEdit(0,NULL); }
+                if (iCode == EN_KILLFOCUS) {
+                    printf("ID=%i, code=%i\n",iID,iCode);
+                    BeginEndEdit(iID,NULL);
+                }
             }
             return 0;
         }

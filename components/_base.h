@@ -20,7 +20,8 @@ typedef enum {
 typedef enum {
     CM_GenerateCode = WM_USER+1,
     CM_BeginEdit,
-    CM_EndEdit
+    CM_CancelEdit,
+    CM_EndEdit,
 } ClassHandlerCommand;
 
 #define _DeclAsArray( _Group , _xClassx , _Name , _Color , _In , _Out , _Exec ) { .bGroup = _Group , .pzName = _Name , .uColor = _Color , .bInPins = _In , .bOutPins = _Out , .bExecPins = _Exec },

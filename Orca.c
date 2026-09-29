@@ -145,7 +145,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             _const hwndCtl = (HWND)lparam;
             if (!hwndCtl) { wNotifyCode = ~wNotifyCode; }
             switch (wNotifyCode) {
-                case -2:
+                case -2:           //Command from accelerator
                     g_CurItemID = wID;
                     __fallthrough;
                 case -1:         { //Command from the menu

@@ -15,6 +15,25 @@ void* objReallocContent( void** pObject , uint32_t iLength ) {
     return ((*pObj)->Content);
 }
 
+// emit a safe string to the buffer, escaping any quotes or backslashes
+int32_t EmitSafeString( char* pBuffer , int32_t iBufSz , const char* zContent , int32_t iLength ) {
+    int32_t iStart = 0, iLen = 0;
+    for (int i=0 ; i<iLength ; i++ ) {
+        if (zContent[i] == '\"' || zContent[i] == '\\' ) {
+            if (i!=iStart) { memcpy( pBuffer+iLen , zContent+iStart , (i-iStart) ); }
+            iLen += (i-iStart); iStart = i+1;
+            pBuffer[iLen++] = '\\';
+            pBuffer[iLen++] = zContent[i];
+        }
+    }
+    if (iStart < iLength) {
+        printf("iStart=%d iLength=%d\n" , iStart, iLength);
+        memcpy( pBuffer+iLen , zContent+iStart , iLength-iStart );
+        iLen += iLength-iStart;
+    }
+    return iLen;
+}
+
 #include "string.c"
 #include "console.c"
 
