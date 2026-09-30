@@ -38,6 +38,14 @@ typedef enum {
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
 
     typedef enum {
+        rsNone   = 0,
+        rsTop    = 1,
+        rsBottom = 2,
+        rsLeft   = 4,
+        rsRight  = 8
+    } ResizeState;
+
+    typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
 
@@ -65,7 +73,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iMouseX=0,iMouseY=0;               //last mouse position
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
     static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
-    static char bDragging=0;                      //0=no drag, 1=drag may start, 2=dragging
+    static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
+    static RECT tResizeCancelRc;                  //original rectangle of the resized object
+    static char bResizing=0, bLastSizeSide=0;     //0=no resize, n=resize side // current cursor
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
@@ -566,34 +576,68 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             } _endwith
         }
     }
+    int ObjectFromPoint( POINT pt , /*OUT*/ RECT* pRect ) {
+        static int iCachedIndex = -1;
+        //if no objects, clear cache and return
+        if ((!ptOrder) || ( !iObjCount )) { return iCachedIndex = -1; }
+        //if index is cached and valid, use it first
+        if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
+            _with( aObject(iCachedIndex) ) {
+                const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                if (PtInRect( &tRc , pt )) {
+                    if (pRect) *pRect = tRc;
+                    return iCachedIndex;
+                }
+            } _endwith;
+        }
+        //otherwise, scan all objects
+        for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
+            _with( aObject(iIndex) ) {
+                const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                if (PtInRect( &tRc , pt )) {
+                    if (pRect) *pRect = tRc;
+                    return iCachedIndex = iIndex;
+                }
+            } _endwith;
+        }
+        return iCachedIndex = -1;
+    }
 
     // ------------- Message dispatch --------------
     switch (message) {
         case WM_ERASEBKGND: { return 1; }
         case WM_SETCURSOR: {
-
+            //keep resizing cursor active while resizing
+            if (bResizing) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
+            pbCurCursor = 0; bLastSizeSide = rsNone; //reset cursor
             //if dragging show moving cursor
-            if (bDragging==2) {
-                SetCursor( LoadCursor( NULL , IDC_SIZEALL ) );
-                return 0;
-            }
+            if (bDragging==2) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
             //if not check if hovering over a visible object
-            const POINT pt = { iMouseX , iMouseY };
-            static int iLastIndex = -1;
-
-            if ((!ptOrder) || ( !iObjCount )) { iLastIndex = -1 ; break; }
-            if (iLastIndex >= iObjCount) { iLastIndex = -1; }
-
-            if ((iLastIndex >= iStartIdx) && (iLastIndex <= iEndIdx)) {
-                _with( aObject(iLastIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
-                    if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; return 0; }
-                } _endwith;
-            }
-            for ( int iIndex = iStartIdx ; iIndex<=iEndIdx ; iIndex++ ) {
+            const POINT pt = { iMouseX , iMouseY }; RECT tRc;
+            int iIndex = ObjectFromPoint( pt , &tRc );
+            if (iIndex >= 0) {
                 _with( aObject(iIndex) ) {
                     const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
-                    if (PtInRect( &tRc , pt )) { SetCursor( LoadCursor( NULL , IDC_HAND ) ) ; iLastIndex=iIndex ; return 0; }
+                    if (PtInRect( &tRc , pt )) {
+                        char bSides = 0;
+                        pbCurCursor = IDC_HAND; //default cursor
+                        //if object is selected and mouse is near an edge to set resize cursor
+                        if ( iSelectedIndex == iIndex) {
+                            if (pt.x < tRc.left+6)   { bLastSizeSide |= rsLeft; }
+                            if (pt.x > tRc.right-6)  { bLastSizeSide |= rsRight; }
+                            if (pt.y < tRc.top+6)    { bLastSizeSide |= rsTop; }
+                            if (pt.y > tRc.bottom-6) { bLastSizeSide |= rsBottom; }
+                            if (bLastSizeSide) {
+                                static char* const pbSideToCursor[] = {
+                                    [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
+                                    [rsTop]  = IDC_SIZENS, [rsBottom] = IDC_SIZENS,
+                                    [rsTop|rsLeft]    = IDC_SIZENWSE, [rsTop|rsRight]    = IDC_SIZENESW,
+                                    [rsBottom|rsLeft] = IDC_SIZENESW, [rsBottom|rsRight] = IDC_SIZENWSE };
+                                pbCurCursor = pbSideToCursor[bLastSizeSide];
+                            }
+                        }
+                        if (pbCurCursor) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
+                    }
                 } _endwith;
             }
             //otherwise DefWindowProc will set default cursor
@@ -602,6 +646,28 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_MOUSEMOVE: {       //Mouse moved in the control
             iMouseX = (short)LOWORD(lParam);  // horizontal position of cursor
             iMouseY = (short)HIWORD(lParam);  // vertical position of cursor
+
+            //if resizing, check sides and adjust new size
+            if (bResizing) {
+                _with( aObject(iSelectedIndex) ) {
+                    //calculate new position/size (adjusted to grid, for bResizing sides)
+                    //if left or top, adjust new position, if right or bottom, adjust new size
+                    int iL=w->iX, iT=w->iY, iW = w->iW , iH = w->iH;
+                    if (bResizing & rsLeft)   { iL = iMouseX & (~7); }
+                    if (bResizing & rsTop)    { iT = iMouseY & (~7); }
+                    if (bResizing & rsRight)  { iW = ((iMouseX-iL)+4) & (~7); }
+                    if (bResizing & rsBottom) { iH = ((iMouseY-iT)+4) & (~7); }
+                    if ( (iW != w->iW) || (iH != w->iH) ) { //update position/size
+                        if (iW < 80) { iW = 80; } else if (iW > 248) { iW = 248; }
+                        if (iH < 36) { iH = 36; } else if (iH > 248) { iH = 248; }
+                        if ( (iW != w->iW) || (iH != w->iH) ) {
+                            w->iX = iL; w->iY = iT; w->iW = iW; w->iH = iH;
+                            SetUpdate();
+                        }
+                    }
+                } _endwith;
+            }
+
             //check if moved enough to start a drag, to active it and backup initial position
             if ((bDragging==1) && ((abs(iMouseX-iDragStartX)>3) || (abs(iMouseY-iDragStartY)>3))) {
                 iDragCancelX = aObject(iSelectedIndex).iX; iDragCancelY = aObject(iSelectedIndex).iY; bDragging = 2;
@@ -857,26 +923,21 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             uint32_t iElapsed = GetMessageTime(); //printf("%i\n",iElapsed);
             iElapsed -= iPrevTime; iPrevTime = GetMessageTime();
             //printf("%i to %i\n",iStartIdx,iEndIdx);
-            for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
-                _with( aObject(iIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
-                    const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) };
-                    if (PtInRect( &tRc , pt )) {
-                        iSelectedIndex = iIndex;
-                        if (iOldSel != iIndex) {
-                            printf("Selected %i at %i,%i\n",iIndex,w->iX,w->iY);
-                        } else {
-                            if (iElapsed<300) {
-                                iPrevTime -= 300;
-                                printf("Double-clicked %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                                BeginEndEdit( iSelectedIndex , &tRc );                            }
-                            //return 0;
-                        }
-                        break ;
+            const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) }; RECT tRc;
+            if ( (iSelectedIndex = ObjectFromPoint( pt , &tRc )) != -1 ) {
+                if (bLastSizeSide) { bResizing = bLastSizeSide; SetCapture(hwnd);return 0; }
+                _with( aObject(iSelectedIndex) ) {
+                    if (iOldSel != iSelectedIndex) {
+                        printf("Selected %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                    } else {
+                        if (iElapsed<300) {
+                            iPrevTime -= 300;
+                            printf("Double-clicked %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                            BeginEndEdit( iSelectedIndex , &tRc );                            }
+                        //return 0;
                     }
                 } _endwith;
             }
-
             if (iOldSel != iSelectedIndex) { SetUpdate(); }
 
             //start of the dragging position
@@ -888,9 +949,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return 0;
         }
         case WM_LBUTTONUP: {       //Button released
-            if (bDragging) { SetCapture( NULL ); }
-            if (bDragging>1) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
-            bDragging = 0; return 0;
+            if (bDragging || bResizing) { SetCapture( NULL ); }
+            if (bDragging>1 || bResizing) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
+            bDragging = 0; bResizing = 0; return 0;
         }
         case WM_KILLFOCUS:         //Lost Focus
         case WM_SETFOCUS: {        //Got Focus
