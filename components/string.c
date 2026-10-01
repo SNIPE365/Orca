@@ -10,16 +10,25 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
             case WM_PAINT: {
                 HDC hdc = hDcBuffer;
                 SelectObject( hdc , hCtlFont );
-                RECT* pRc = (RECT*)lParam;
-                DrawText( hdc , w->zContent , w->iLength , pRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
-                break;
+                RECT *pRc = (RECT*)lParam;
+                RECT RcCalc=*pRc;
+                int iFlags = DT_NOPREFIX | DT_CENTER  ;
+                DrawText( hdc , w->zContent , w->iLength , &RcCalc , iFlags | DT_CALCRECT );
+                int iWid = RcCalc.right - RcCalc.left, iHei = RcCalc.bottom - RcCalc.top;
+                int iMaxWid = pRc->right - pRc->left, iMaxHei = pRc->bottom - pRc->top;
+                if (iWid > iMaxWid) { iWid = iMaxWid; iFlags |= DT_END_ELLIPSIS; }
+                if (iHei > iMaxHei) { iHei = iMaxHei; iFlags |= DT_END_ELLIPSIS; }
+                pRc->left += iMaxWid/2; pRc->top += iMaxHei/2;
+                pRc->right = pRc->left + iWid/2; pRc->bottom = pRc->top + iHei/2;
+                pRc->left -= iWid/2; pRc->top -= iHei/2;
+                DrawText( hdc , w->zContent , w->iLength , pRc , iFlags );
             }
             case CM_GenerateCode: { //wParam = BufferRemaining // lParam = (char*)Buffer
                 #define emitf(...) iLen += sprintf( pBuffer+iLen , __VA_ARGS__ )
                 char* pBuffer = (char*)lParam; int32_t iBufSz = (int32_t)wParam, iLen=0;
-                emitf( "  char* %s = \"'" , pDiagram->zName );
+                emitf( "  char* %s = \"" , pDiagram->zName );
                 iLen += EmitSafeString( pBuffer+iLen , iBufSz-iLen , w->zContent , w->iLength );
-                emitf( "%s" , "'\";\n" );
+                emitf( "%s" , "\";\n" );
                 strcpy( g_ScratchBuffer , pDiagram->zName );
                 return iLen;
                 #undef emitf

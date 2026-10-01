@@ -37,14 +37,13 @@ typedef enum {
 
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
 
-    typedef enum {
+    typedef enum { //resize sides
         rsNone   = 0,
         rsTop    = 1,
         rsBottom = 2,
         rsLeft   = 4,
         rsRight  = 8
     } ResizeState;
-
     typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
@@ -71,6 +70,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iStartIdx=0, iEndIdx=-1;           //start/end indexes for drawn objects (cache)
     static int iSelectedIndex=-1;                 //current selected index
     static int iMouseX=0,iMouseY=0;               //last mouse position
+    static int iFontSize=0;
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
     static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
     static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
@@ -305,7 +305,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         {
             SIZE tFontSz;
             GetTextExtentPoint32( hDcBuffer , "AWI" , 1 , &tFontSz );
-            iFontWidth = tFontSz.cx/3; iFontHeight = tFontSz.cy;
+            iFontWidth = tFontSz.cx/3; iFontHeight = iFontSize = tFontSz.cy;
         }
 
 
@@ -531,7 +531,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             int iID=0;
             if (wParam == VK_ESCAPE) { iID=1 ; wParam=VK_RETURN; }
             if (wParam == VK_RETURN) {
+                if (GetKeyState( VK_CONTROL ) >= 0) {
                 return SendMessage( GetParent( hwnd ) , WM_COMMAND , MAKEWPARAM(iID,EN_KILLFOCUS) , (LPARAM)hwnd );
+                }
             }
         }
         return CallWindowProc( hwndOrgProc , hwnd , uMsg , wParam , lParam );
@@ -539,9 +541,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     void BeginEndEdit( int iIndex /* =0 */ , const RECT* pRC /* = NULL */ ) {
         if (pRC && !hwndEdit) {
             const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
-            const int iTop = (pRC->top+2)+iBorderUD, iBottom = pRC->bottom-(iBorderUD+2);
+            int cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
+            int iTop, iBottom;
+            if ((iHei+(iBorderUD/4)) > iFontSize*5) {
+                iTop = (pRC->top+2)+iBorderUD; iBottom = pRC->bottom-(iBorderUD+2);
+                cStyle |= ES_MULTILINE | ES_AUTOVSCROLL;
+            } else {
+                iTop = pRC->top+((iHei-iFontSize)/2); iBottom = iTop + iFontSize+2;
+            }
             _with( *pRC ) {
-                _const cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
                 hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
             } _endwith;
             //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
@@ -646,6 +654,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_MOUSEMOVE: {       //Mouse moved in the control
             iMouseX = (short)LOWORD(lParam);  // horizontal position of cursor
             iMouseY = (short)HIWORD(lParam);  // vertical position of cursor
+            char bMoved = 0;
+            int iNewX,iNewY;
 
             //if resizing, check sides and adjust new size
             if (bResizing) {
@@ -653,17 +663,19 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     //calculate new position/size (adjusted to grid, for bResizing sides)
                     //if left or top, adjust new position, if right or bottom, adjust new size
                     int iL=w->iX, iT=w->iY, iW = w->iW , iH = w->iH;
-                    if (bResizing & rsLeft)   { iL = iMouseX & (~7); }
-                    if (bResizing & rsTop)    { iT = iMouseY & (~7); }
-                    if (bResizing & rsRight)  { iW = ((iMouseX-iL)+4) & (~7); }
-                    if (bResizing & rsBottom) { iH = ((iMouseY-iT)+4) & (~7); }
-                    if ( (iW != w->iW) || (iH != w->iH) ) { //update position/size
-                        if (iW < 80) { iW = 80; } else if (iW > 248) { iW = 248; }
-                        if (iH < 36) { iH = 36; } else if (iH > 248) { iH = 248; }
-                        if ( (iW != w->iW) || (iH != w->iH) ) {
-                            w->iX = iL; w->iY = iT; w->iW = iW; w->iH = iH;
-                            SetUpdate();
-                        }
+                    if (bResizing & rsLeft)   { iL = ((iMouseX+iViewX) & (~7)); iW += (w->iX-iL); }
+                    if (bResizing & rsTop)    { iT = ((iMouseY+iViewY) & (~7)); iH += (w->iY-iT); }
+                    if (bResizing & rsRight)  { iW = ((iMouseX+iViewX-iL)+4) & (~7); }
+                    if (bResizing & rsBottom) { iH = ((iMouseY+iViewY-iT)+4) & (~7); }
+                    if (iL<0) { iL = 0; }; if (iT<0) { iT = 0; }
+                    if (iW < 80) { if (bResizing & rsLeft) { iL = w->iX+w->iW-80; } ; iW = 80; }
+                    else if (iW > 248) { if (bResizing & rsLeft) { iL = w->iX+w->iW-248; } ; iW = 248; }
+                    if (iH < 36) { if (bResizing & rsTop)  { iT = w->iY+w->iH-36; } ; iH = 36; }
+                    else if (iH > 248) { if (bResizing & rsTop)  { iT = w->iY+w->iH-248; } ; iH = 248; }
+                    if ( (iL != w->iX) || (iT != w->iY) || (iW != w->iW) || (iH != w->iH) ) { //update position/size
+                        if ( (iL != w->iX) || (iT != w->iY) ) { bMoved = 1; iNewX = iL; iNewY = iT; }
+                        w->iX = iL; w->iY = iT; w->iW = iW; w->iH = iH;
+                        SetUpdate();
                     }
                 } _endwith;
             }
@@ -675,30 +687,32 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //if dragging move the block aligned to the grid;
             if (bDragging==2) {
                 _with( aObject(iSelectedIndex) ) {
-                    const int iNewX = ((iDragCancelX+(iMouseX-iDragStartX))+3) & ~7;
-                    const int iNewY = ((iDragCancelY+(iMouseY-iDragStartY))+3) & ~7;
+                    iNewX = ((iDragCancelX+(iMouseX-iDragStartX))+3) & ~7;
+                    iNewY = ((iDragCancelY+(iMouseY-iDragStartY))+3) & ~7;
+                    if (iNewX<0) { iNewX = 0; }; if (iNewY<0) { iNewY = 0; }
                     if ((iNewX != w->iX) || (iNewY != w->iY)) {
-                        w->iX = iNewX; w->iY= iNewY;
-                        //reorder the dragging object
-                        while (1) {
-                            if (iSelectedIndex < (iObjCount-1)) {
-                                const int iNextY = aObject(iSelectedIndex+1).iY;
-                                if ( (iNewY > iNextY) || ((iNewY==iNextY) && (iNewX > aObject(iSelectedIndex+1).iX)) ) {
-                                    SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
-                                } //endif
-                            } //endif
-                            if (iSelectedIndex > 0) {
-                                const int iPrevY = aObject(iSelectedIndex-1).iY;
-                                if ( (iNewY < iPrevY) || ((iNewY==iPrevY) && (iNewX < aObject(iSelectedIndex-1).iX)) ) {
-                                    SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
-                                } //endif
-                            } //endif (iSelectedIndex > 0) {
-                            break;
-                        } //wend
-
+                        w->iX = iNewX; w->iY= iNewY; bMoved = 1;
                         SetUpdate();
                     } //endif
                 } _endwith;
+            } //endif (bDragging==2)
+
+            if (bMoved) { //if moved then may reorder,scroll
+                while (1) { //reorder the dragging object
+                    if (iSelectedIndex < (iObjCount-1)) {
+                        const int iNextY = aObject(iSelectedIndex+1).iY;
+                        if ( (iNewY > iNextY) || ((iNewY==iNextY) && (iNewX > aObject(iSelectedIndex+1).iX)) ) {
+                            SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
+                        } //endif
+                    } //endif
+                    if (iSelectedIndex > 0) {
+                        const int iPrevY = aObject(iSelectedIndex-1).iY;
+                        if ( (iNewY < iPrevY) || ((iNewY==iPrevY) && (iNewX < aObject(iSelectedIndex-1).iX)) ) {
+                            SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
+                        } //endif
+                    } //endif (iSelectedIndex > 0) {
+                    break;
+                } //wend
                 _with( aObject(iSelectedIndex) ) {
                     bool bUpdate=0;
                     if ((w->iX+w->iW) > iMaxX) { iMaxX = (w->iX+w->iW); iMaxXIdx=iSelectedIndex; bUpdate=true; }
@@ -713,8 +727,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     if (iMouseY >= tRc.bottom) { PostMessage( hwnd , WM_VSCROLL , SB_LINEDOWN , 0 ); }
                     if (iMouseX < 0)           { PostMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0 ); }
                     if (iMouseX >= tRc.right)  { PostMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0 ); }
-                } //endif (bSwap) {
-            } //endif (bDragging==2) {
+                } //endif (bSwap)
+            } //endif (bMoved)
 
             return 0;
         }
@@ -868,7 +882,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             hSmallFont = GetStockObject( SYSTEM_FONT );
             hbBack = CreateSolidBrush( cBack );
             hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
-            hpSelected = CreatePen( PS_SOLID , 4 , cSelected );
+            hpSelected = CreatePen( PS_SOLID , 3 , cSelected );
             PostMessage( hwnd , WM_HSCROLL , 0,0 );
             PostMessage( hwnd , WM_VSCROLL , 0,0 );
             return 1;
@@ -888,7 +902,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             tFont.lfWeight = FW_NORMAL;
             strcpy(tFont.lfFaceName,"Wingdings 3");
             hSymFont = CreateFontIndirect( &tFont );
-
+            SetUpdate();
             return 0;
         }
         case WM_GETFONT: {         //Retrieve Current Font
@@ -932,7 +946,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     } else {
                         if (iElapsed<300) {
                             iPrevTime -= 300;
-                            printf("Double-clicked %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                            printf("Editing %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
                             BeginEndEdit( iSelectedIndex , &tRc );                            }
                         //return 0;
                     }
@@ -964,7 +978,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             HWND hCtl = (HWND) lParam;      // handle of edit control
             if (hwndEdit && hCtl==hwndEdit) {
                 if (iCode == EN_KILLFOCUS) {
-                    printf("ID=%i, code=%i\n",iID,iCode);
+                    //printf("ID=%i, code=%i\n",iID,iCode);
                     BeginEndEdit(iID,NULL);
                 }
             }
