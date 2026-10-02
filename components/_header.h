@@ -33,5 +33,8 @@ typedef struct {
     uint8_t  bGroup;
     uint8_t  bInPins, bOutPins, bExecPins;
     COLORREF uColor;
+    char*    pzNameTemplate;
+    int      iMinBytesConstructor;
+    uint32_t uFlags;
 } ClassInterfaceStruct;
 ////////////////////////////////////////////////////////////////////////////////////////////////

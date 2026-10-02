@@ -54,7 +54,9 @@ LRESULT fnClsInvalidHandler( _ClassPrototype ) { return 0; }
 void initComponents() {
 
     // initialize object type info handlers (can't declare statically because they are nested functions)
-    #define _SetHandler( _xGroupx , _Class , _xNamex , _xColorx , _xInPinsx , _xOutPinsx , _xExecPinsx )  g_ClassInterface[ iIdx++ ].pfHandlerProc = fn##_Class##Handler;
+    #define _SetHandler( _xGroupx , _Class , _xNamex , _xColorx , _xInPinsx , _xOutPinsx , _xExecPinsx , _xTemplatex , _xFlagsx ) \
+        (g_ClassInterface[ iIdx++ ].pfHandlerProc = fn##_Class##Handler)( NULL , CM_GetInfo , 0,0 );
+    // set handler and call CM_GetInfo to initialize
     int iIdx=0;
     _ForEachBuiltinClassID( _SetHandler );
     #undef _SetHandler

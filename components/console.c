@@ -1,8 +1,10 @@
+#define ThisClass ClsStdOut
+
 typedef struct {
     HANDLE hConsole;
 } ClsStdOutStruct;
 
-LRESULT fnClsStdoutHandler( _ClassPrototype ) {
+LRESULT fnClsStdOutHandler( _ClassPrototype ) {
     DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
     _with( *(ClsStdOutStruct*)pObject ) {
         switch (message) {
@@ -14,6 +16,11 @@ LRESULT fnClsStdoutHandler( _ClassPrototype ) {
                     DrawText( hdc , w->zContent , w->iLength , pRc , DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX );
                     break;
                 */
+                break;
+            }
+            case CM_GetInfo:      { //lParam = (ClassInfoStruct*)pOptOutInfo
+                __Internal_ClassInfoStruct(ThisClass);
+                break;
             }
             case CM_GenerateCode: { //wParam = BufferRemaining // lParam = (char*)Buffer
                 #define emitf(...) iLen += sprintf( pBuffer+iLen , "  " __VA_ARGS__ )
@@ -31,3 +38,5 @@ LRESULT fnClsStdoutHandler( _ClassPrototype ) {
     } _endwith;
     return 0;
 }
+
+#undef ThisClass

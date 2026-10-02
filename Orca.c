@@ -133,16 +133,16 @@ static int ProjectBuild() {
 }
 
 // *************** Procedure Function ****************
-static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARAM lparam ) {
+static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
     #include "modules/controlFuncs.c"
     switch ( message ) {
         case WM_CREATE:  { //Window was created
             return wndCreate( hwnd );
         } // WM_CREATE
         case WM_COMMAND: { //Event happened to a control (child window/control)
-            _auto wNotifyCode = (int)(HIWORD(wparam));
-            _const wID = LOWORD(wparam);
-            _const hwndCtl = (HWND)lparam;
+            _auto wNotifyCode = (int)(HIWORD(wParam));
+            _const wID = LOWORD(wParam);
+            _const hwndCtl = (HWND)lParam;
             if (!hwndCtl) { wNotifyCode = ~wNotifyCode; }
             switch (wNotifyCode) {
                 case -2:           //Command from accelerator
@@ -194,8 +194,8 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             return 0;
         }
         case WM_TIMER: {
-            if (wparam != WM_NCMOUSEMOVE) { break; }
-            KillTimer( hwnd , wparam );
+            if (wParam != WM_NCMOUSEMOVE) { break; }
+            KillTimer( hwnd , wParam );
             POINT pt; GetCursorPos( &pt );
             RECT rc; GetWindowRect( hwnd , &rc );
             if (PtInRect( &rc , pt )) {
@@ -205,12 +205,12 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             [[fallthrough]]; //may falltrough
         }
         case WM_MOUSEMOVE: {
-            wparam = HTCLIENT;
+            wParam = HTCLIENT;
             [[fallthrough]]; //falltrough
         }
         case WM_NCMOUSEMOVE: {
             bool bEnabled = false , bChanged = false;
-            switch ( wparam ) {
+            switch ( wParam ) {
                 case HTBORDER : case HTBOTTOM : case HTBOTTOMLEFT : case HTBOTTOMRIGHT : case HTGROWBOX :
                 case HTLEFT : case HTRIGHT : case HTTOP : case HTTOPLEFT : case HTTOPRIGHT : bEnabled = true;
             }
@@ -226,7 +226,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             break;
         }
         case WM_SIZE:    {
-            if (wparam == SIZE_MINIMIZED) { break; }  // resizing flag
+            if (wParam == SIZE_MINIMIZED) { break; }  // resizing flag
             wndResize( hwnd );
             //puts("Size changed?");
             //printf("%ix%i\n", g_tMain.iW , g_tMain.iH);
@@ -236,20 +236,37 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
             break;
         }
         case WM_INITMENUPOPUP: { //track newest menu handle
-            _const hMenu = (HMENU)wparam;
+            _const hMenu = (HMENU)wParam;
             //printf("MenuI: %X\n",hMenu);
             g_hCurMenu = hMenu;
             break;
         }
         case WM_MENUSELECT: { //track newest menu handle/item/state
-            _const iID = (UINT)(LOWORD(wparam));
-            _const fuFlags = (UINT)(HIWORD(wparam));
-            _const hMenu = (HMENU)lparam;
+            _const iID = (UINT)(LOWORD(wParam));
+            _const fuFlags = (UINT)(HIWORD(wParam));
+            _const hMenu = (HMENU)lParam;
             //printf("MenuS: %X\n",hMenu);
             if (hMenu) { g_CurItemID = iID ; g_hCurMenu = hMenu; }
             return 0; //break;
         } //WM_MENUSELECT
         case WM_NOTIFY:  { //some events goes trough notify instead of command (child window/control)
+            int idCtrl = wParam;
+            NMHDR* pnmh = (LPNMHDR)lParam;
+            int code = pnmh->code;
+            switch (idCtrl) {
+                case wcPanComponents: {
+                    switch (code) {
+                        case TVN_SELCHANGED : {
+                            NM_TREEVIEW* pnmtv = (NM_TREEVIEW*)pnmh;
+                            int itemID = pnmtv->itemNew.lParam;
+                            if (itemID) { puts("TVN_SELCHANGED"); }
+                            if (itemID) { SendMessage( _CTL(wcDiagram) , DIM_SETCLASS , itemID , 0 ); }
+                            break;
+                        } //case
+                    } //switch
+                    break;
+                } //case
+            } //switch
             break;
         } // WM_NOTIFY
         case WM_PAINT:   { //this is called when an area of the window need to be painted (so manual drawing can be done here)
@@ -269,7 +286,7 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wparam, LPARA
     } // switch ( message )
 
     // *** if program reach here default predefined action will happen ***
-    return DefWindowProc( hwnd, message, wparam, lparam );
+    return DefWindowProc( hwnd, message, wParam, lParam );
 
 } //WndProc()
 

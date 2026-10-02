@@ -24,18 +24,21 @@ typedef struct {
 
 DiagramFileStruct* g_ProjectFiles[256]; int g_ProjectFileCount = 0;
 
-typedef enum {
+typedef enum { //Diagram custom messages
     DIM_BASE = WM_USER,
     DIM_INSERT,              //Insert a new object in current diagram
     DIM_REMOVE,              //Remove the selected object from current diagram
     DIM_SELECT,              //Change the view to a new diagram
     DIM_GENERATE,            //Generate code for all diagrams
     DIM_TESTFILE,            //Generate a test file module
+    DIM_SETCLASS,            //Set the class to add when inserting a new object
     /* PRIVATE ONES */
     DIM_CREATE_BUFFER,
 } DiagramEnum;
 
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
+
+    //#define _CTL(_ctlId) g_CTL[_ctlId].hwnd
 
     typedef enum { //resize sides
         rsNone   = 0,
@@ -80,6 +83,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
     static void* hwndOrgProc = NULL;
+    static int iClassToAdd = -1;
+
+    static const int cBlkBrd = 4;
 
     #include "../components/_basedecl.h"
 
@@ -118,7 +124,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             _with( aObject(iObjCount) ) {
                 w->iX = 8           ; w->iW = 128;
                 w->iY = iPosY       ; w->iH = 48;
-                w->iClassID = idClsStdout;
+                w->iClassID = idClsStdOut;
                 strncpy( w->zName , "STDOUT" , _countof(w->zName) );
                 iPosY += w->iH+8;
             } _endwith;
@@ -172,7 +178,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 _with( aObject(iObjCount) ) {
                     w->iX = iPosX       ; w->iW = 128;
                     w->iY = iPosY       ; w->iH = 48+_rnd(4)*8;
-                    w->iClassID = idClsStdout;
+                    w->iClassID = idClsStdOut;
                     sprintf( w->zName , "STDOUT%02d" , iObjCount );
                     iPosY += w->iH+(1+_rnd(4))*8;
                 } _endwith
@@ -409,7 +415,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         InvalidateRect( hwnd , NULL , true ); //UpdateWindow( hwnd );
         return;
     }; //void DrawWindow(void)
-    int InsertObject( int iPosX , int iPosY ) {
+    int InsertObject( int iPosX , int iPosY , int iClassID ) {
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
             iObjMaxCount += _MaxAllocationGap;
@@ -432,30 +438,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
               ptOrder[iNew] = ptOrder[iNew-1];
             } _endwith;
         }
-
-        /*
-        ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
-        _with( aObject(iObjCount) ) {
-            w->iX = 8           ; w->iW = 128;
-            w->iY = iPosY       ; w->iH = 48;
-            w->iClassID = idClsString;
-            strncpy( w->zName , "MyString" , _countof(w->zName) );
-            iPosY += w->iH+24;
-        } _endwith;
-        _with( aObject_Content(iObjCount,ClsStringStruct) ) {
-            w->iLength = 11; w->iBuffer = 12;
-            strcpy( w->zContent , "Hello World" );
-        } _endwith;
-        iObjCount++;
-        */
-
         //initialize new slot
-        ptOrder[iNew] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
+        _auto pClsInfo = &g_ClassInterface[iClassID];
+        printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
+        ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
-            w->iX = iPosX; w->iW = (48+(rand() % 120)) & (~7);
-            w->iY = iPosY; w->iH = (32+(rand() % 64)) & (~7);
-            w->iClassID = idClsString;
-            sprintf(w->zName , "Obj%i", iObjTotal+1 );
+            w->iX = iPosX; w->iW = 80;
+            w->iY = iPosY; w->iH = 36;k
+            w->iClassID = iClassID;
+            sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
             _with( aObject_Content(iNew,ClsStringStruct) ) {
                 w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
             } _endwith;
@@ -591,7 +582,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //if index is cached and valid, use it first
         if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
             _with( aObject(iCachedIndex) ) {
-                const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                const RECT tRc = {
+                    .left  = (w->iX-iViewX)-cBlkBrd       , .top    = (w->iY-iViewY)-cBlkBrd ,
+                    .right = (w->iX-iViewX+w->iW)+cBlkBrd , .bottom = (w->iY-iViewY+w->iH)+cBlkBrd };
                 if (PtInRect( &tRc , pt )) {
                     if (pRect) *pRect = tRc;
                     return iCachedIndex;
@@ -665,7 +658,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     int iL=w->iX, iT=w->iY, iW = w->iW , iH = w->iH;
                     if (bResizing & rsLeft)   { iL = ((iMouseX+iViewX) & (~7)); iW += (w->iX-iL); }
                     if (bResizing & rsTop)    { iT = ((iMouseY+iViewY) & (~7)); iH += (w->iY-iT); }
-                    if (bResizing & rsRight)  { iW = ((iMouseX+iViewX-iL)+4) & (~7); }
+                    if (bResizing & rsRight)  { iW = ((iMouseX+iViewX-iL)+4) & (~7); } //4 = Half GridSize
                     if (bResizing & rsBottom) { iH = ((iMouseY+iViewY-iT)+4) & (~7); }
                     if (iL<0) { iL = 0; }; if (iT<0) { iT = 0; }
                     if (iW < 80) { if (bResizing & rsLeft) { iL = w->iX+w->iW-80; } ; iW = 80; }
@@ -847,6 +840,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return lRes;
             break;
         }
+        case DIM_SETCLASS: {       //wParam = ClassId (sets class to be added when inserting a new object)
+            iClassToAdd = (int)wParam;
+            break;
+        }
         case DIM_GENERATE: {       //wParam = FileCount // lParam = DiagramFileStruct**
             WriteBackObject();
             GenerateFullCode( (int)wParam , (DiagramFileStruct**)lParam );
@@ -920,7 +917,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 case VK_LEFT  : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0); }
                 case VK_RIGHT : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0); }
                 case VK_INSERT: {
-                    InsertObject( iViewX+iMouseX , iViewY+iMouseY );
+                    if (iClassToAdd < 1) {
+                        MessageBox( hwnd , "No class selected" , "Error" , MB_ICONINFORMATION );
+                        return 0;
+                    }
+                    InsertObject( iViewX+iMouseX , iViewY+iMouseY , iClassToAdd );
                     break;
                 }
                 case VK_DELETE: {

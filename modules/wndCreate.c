@@ -176,6 +176,8 @@ LRESULT wndCreate( HWND hwnd ) {
     for (int i=1 ; i < _countof(g_ClassInterface) ; i++ ) {
         _with( g_ClassInterface[i] ) {
             tItem.hParent = g_atClassGroup[ w->bGroup ].hITEM;
+            tItem.item.mask = TVIF_TEXT | TVIF_PARAM;
+            tItem.item.lParam = i;
             tItem.item.pszText = w->pzName;
             TreeView_InsertItem( _CTL(wcPanComponents) , &tItem );
         } _endwith

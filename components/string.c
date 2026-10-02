@@ -1,3 +1,5 @@
+#define ThisClass ClsString
+
 typedef struct {
     int32_t iLength,iBuffer;
     char zContent[0];
@@ -7,7 +9,7 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
     DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
     _with( *(ClsStringStruct*)pObject; ) {
         switch (message) {
-            case WM_PAINT: {
+            case WM_PAINT:        { //lParam = (RECT*)pRc
                 HDC hdc = hDcBuffer;
                 SelectObject( hdc , hCtlFont );
                 RECT *pRc = (RECT*)lParam;
@@ -22,6 +24,11 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 pRc->right = pRc->left + iWid/2; pRc->bottom = pRc->top + iHei/2;
                 pRc->left -= iWid/2; pRc->top -= iHei/2;
                 DrawText( hdc , w->zContent , w->iLength , pRc , iFlags );
+                break;
+            }
+            case CM_GetInfo:      { //lParam = (ClassInfoStruct*)pOptOutInfo
+                __Internal_ClassInfoStruct(ThisClass);
+                break;
             }
             case CM_GenerateCode: { //wParam = BufferRemaining // lParam = (char*)Buffer
                 #define emitf(...) iLen += sprintf( pBuffer+iLen , __VA_ARGS__ )
@@ -33,7 +40,7 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 return iLen;
                 #undef emitf
             }
-            case CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)ptClick
+            case CM_BeginEdit:    { //wParam = hCtlEdit // lParam = (POINTS)ptClick
                 HANDLE hCtlEdit = (HANDLE)wParam;
                 POINTS ptClick = *(POINTS*)&lParam;
                 RECT tRect; GetClientRect( hCtlEdit , &tRect );
@@ -50,7 +57,7 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 GetWindowText( hCtlEdit , pw->zContent , pw->iBuffer );
                 break;
             }
-            case CM_CancelEdit: { //wParam = hCtlEdit // lParam = (void**)pObject
+            case CM_CancelEdit:   { //wParam = hCtlEdit // lParam = (void**)pObject
                 break; // nothing todo here
             }
             default:
@@ -58,3 +65,5 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
         }
     } _endwith;
 }
+
+#undef ThisClass
