@@ -444,7 +444,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
             w->iX = iPosX; w->iW = 80;
-            w->iY = iPosY; w->iH = 36;k
+            w->iY = iPosY; w->iH = 36;
             w->iClassID = iClassID;
             sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
             _with( aObject_Content(iNew,ClsStringStruct) ) {
