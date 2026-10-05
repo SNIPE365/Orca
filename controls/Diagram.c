@@ -453,8 +453,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
         ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
+<<<<<<< HEAD
             w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
             w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
+=======
+            w->iX = iPosX; w->iW = 80;
+            w->iY = iPosY; w->iH = 36;
+>>>>>>> 39d0122043e4fd3349a4e0e7907434a5993c2c18
             w->iClassID = iClassID;
             sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
             _with( aObject_Content(iNew,ClsStringStruct) ) {
