@@ -37,24 +37,40 @@ inline LRESULT cbGetItemData(int iID, int iIndex) {
 }
 
 // treeview control inline functions
-HTREEITEM tvFindItemByData(int iID, LPARAM dwData) {
-    //walk treeview items to find the one with the matching data
-    HTREEITEM hItem = TreeView_GetFirstVisible(_CTL(iID));
+#define FindTreeItemByLParam( _iID , _targetLParam ) FindTreeItemByLParamEx( _iID, _targetLParam, NULL )
+HTREEITEM FindTreeItemByLParamEx(int iID, LPARAM targetLParam, HTREEITEM hStart /* = NULL */) {
+    //if (iID == 0) { return NULL; }
+    // Default to root if caller passed NULL
+    if (hStart == NULL) { hStart = TreeView_GetRoot(_CTL(iID)); }
+
+    HTREEITEM hItem = hStart;
     while (hItem != NULL) {
-        TVITEM tvi;
+        TVITEM tvi = {0};
+        tvi.mask = TVIF_HANDLE | TVIF_PARAM;
         tvi.hItem = hItem;
-        tvi.mask = TVIF_PARAM;
-        TreeView_GetItem(_CTL(iID), &tvi);
-        if (tvi.lParam == dwData) { return hItem; }
-        hItem = TreeView_GetNextVisible(_CTL(iID), hItem);
+        if (TreeView_GetItem( _CTL(iID), &tvi) && tvi.lParam == targetLParam) { return hItem; } // Match found
+        // Recursively search child items
+        HTREEITEM hChild = TreeView_GetChild(_CTL(iID), hItem);
+        if (hChild != NULL) {
+            HTREEITEM hFound = FindTreeItemByLParamEx( iID , targetLParam, hChild);
+            if (hFound != NULL) { return hFound; }
+        }
+        // Move to sibling at current level
+        hItem = TreeView_GetNextSibling(_CTL(iID), hItem);
     }
-    return hItem;
+
+    return NULL;
 }
-inline LRESULT tvSelectItem(int iID, HTREEITEM hItem) {
+
+LRESULT tvSelectItem(int iID, HTREEITEM hItem) {
     //make sure item is visible and parent nodes are expanded
-    TreeView_Expand( _CTL(iID), TVE_EXPAND , hItem );
-    TreeView_EnsureVisible( _CTL(iID), hItem );
     return TreeView_SelectItem( _CTL(iID) , hItem );
+    while (hItem != NULL) {
+        printf("Item=%p\n", hItem);
+        TreeView_Expand( _CTL(iID), TVE_EXPAND , hItem );
+        TreeView_EnsureVisible( _CTL(iID), hItem );
+        hItem = TreeView_GetParent(_CTL(iID), hItem);
+    }
 }
 
 inline LRESULT ctlParentCommand(int iID, int iCode) {

@@ -192,8 +192,8 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARA
                 } break; } break;
                 case wcDiagram: {
                     //class changed, so reflect selection in the treeview (lParam = new class)
-                    printf("wcDiagram: class changed to %d\n" , lParam);
-                    HTREEITEM hItem = tvFindItemByData(wcPanComponents, (LPARAM)lParam);
+                    //printf("wcDiagram: class changed to %d\n" , lParam);
+                    HTREEITEM hItem = FindTreeItemByLParam(wcPanComponents, (LPARAM)lParam);
                     if (hItem != NULL) { tvSelectItem ( wcPanComponents , hItem ); }
                 }
             } //switch (wID)
