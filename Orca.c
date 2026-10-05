@@ -190,6 +190,12 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARA
                             //
                         } break;
                 } break; } break;
+                case wcDiagram: {
+                    //class changed, so reflect selection in the treeview (lParam = new class)
+                    printf("wcDiagram: class changed to %d\n" , lParam);
+                    HTREEITEM hItem = tvFindItemByData(wcPanComponents, (LPARAM)lParam);
+                    if (hItem != NULL) { tvSelectItem ( wcPanComponents , hItem ); }
+                }
             } //switch (wID)
             return 0;
         }
@@ -262,6 +268,22 @@ static CALLBACK LRESULT WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARA
                             if (itemID) { puts("TVN_SELCHANGED"); }
                             if (itemID) { SendMessage( _CTL(wcDiagram) , DIM_SETCLASS , itemID , 0 ); }
                             break;
+                        } //case
+                        case TVN_KEYDOWN: {
+                            TV_KEYDOWN* pnmtv = (TV_KEYDOWN*)pnmh;
+                            switch (pnmtv->wVKey) {
+                                case VK_INSERT: case VK_DELETE: {
+                                    //check if mouse position was inside diagram
+                                    _auto tPosS = GetMessagePos();
+                                    POINT tPos = { MAKEPOINTS(tPosS).x , MAKEPOINTS(tPosS).y };
+                                    ScreenToClient(hwnd, &tPos);
+                                    if (tPos.x < 0 || tPos.x >= g_CTL[wcDiagram].iPW ||
+                                        tPos.y < 0 || tPos.y >= g_CTL[wcDiagram].iPH) { break; }
+                                    SetFocus( _CTL(wcDiagram) );
+                                    SendMessage( _CTL(wcDiagram) , WM_KEYDOWN , (pnmtv->wVKey) , 1 );
+                                    break;
+                                } //cases
+                            } //switch
                         } //case
                     } //switch
                     break;

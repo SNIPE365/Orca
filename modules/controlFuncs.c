@@ -32,9 +32,29 @@ inline LRESULT cbSetEditSel( int iID, int ichStart, int ichEnd ) {
 inline LRESULT cbSelectString( int iID , int iIdxStart , LPCTSTR pzText) {
     return SendMessage(_CTL(iID), CB_SELECTSTRING , iIdxStart , (LPARAM)pzText);
 }
-
 inline LRESULT cbGetItemData(int iID, int iIndex) {
     return SendMessage(_CTL(iID), CB_GETITEMDATA, (WPARAM)iIndex, 0);
+}
+
+// treeview control inline functions
+HTREEITEM tvFindItemByData(int iID, LPARAM dwData) {
+    //walk treeview items to find the one with the matching data
+    HTREEITEM hItem = TreeView_GetFirstVisible(_CTL(iID));
+    while (hItem != NULL) {
+        TVITEM tvi;
+        tvi.hItem = hItem;
+        tvi.mask = TVIF_PARAM;
+        TreeView_GetItem(_CTL(iID), &tvi);
+        if (tvi.lParam == dwData) { return hItem; }
+        hItem = TreeView_GetNextVisible(_CTL(iID), hItem);
+    }
+    return hItem;
+}
+inline LRESULT tvSelectItem(int iID, HTREEITEM hItem) {
+    //make sure item is visible and parent nodes are expanded
+    TreeView_Expand( _CTL(iID), TVE_EXPAND , hItem );
+    TreeView_EnsureVisible( _CTL(iID), hItem );
+    return TreeView_SelectItem( _CTL(iID) , hItem );
 }
 
 inline LRESULT ctlParentCommand(int iID, int iCode) {

@@ -1,13 +1,23 @@
 #include <windows.h>
 #include <winscard.h>
+
+#define _Grid2Pix(_sz) ((_sz)*_GridSize)
+#define _Pix2Grid(_sz) ((_sz)/_GridSize)
+
 _const _MaxAllocationGap = 128;
+_const _GridSize = 8;
+_const _BlkMinWid = _Pix2Grid(80);
+_const _BlkMinHei = _Pix2Grid(36);
+_const _BlkMaxWid = 128; //_Pix2Grid(1024);
+_const _BlkMaxHei = 128; //_Pix2Grid(1024);
 
 typedef struct {
-    int32_t  iY;                //+ 4= 4 // Y position of the object
-    int16_t  iX;                //+ 2= 6 // X position of the object
-    uint8_t  iW,iH;             //+ 2= 8 // Width and height of the object
+    //uint32_t iObjSize;        // Size of the object (do i need that?)
     uint16_t iClassID;          //+ 2=10 // ObjectClassID of the object
-    uint8_t bFlags, bResv;      //+ 2=12 // Flags and reserved byte of the object
+    int16_t  iY;                //+ 4= 4 // Y position of the object (in grid units)
+    int16_t  iX;                //+ 2= 6 // X position of the object (in grid units)
+    uint8_t  iW,iH;             //+ 2= 8 // Width and height of the object (grid units)
+    uint8_t  bFlags, bResv;     //+ 2=12 // Flags and reserved byte of the object
     char zName[19], zZero;      //+20=32 // Name (user) of the object and zero terminator
     char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
@@ -18,7 +28,7 @@ typedef struct {
     int iObjectMaxCount;
     DiagramObjectStruct** pObjects;
     //cache members
-    int iViewX, iViewY;
+    int iViewX, iViewY; //in pixels
     int iSelectedIdx;
 } DiagramFileStruct;
 
@@ -67,15 +77,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     static int iObjCount=0, iObjMaxCount=0; //object counting / limit
     static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
-    static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object
-    static int iViewX=0, iViewY=0;                //scrolling offset
+    static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object (pixels)
+    static int iViewX=0, iViewY=0;                //scrolling offset (pixels)
     static int iMaxXIdx=-1 , iMaxYIdx=-1;         //indexes for the objects that have the maximum position (cache)
     static int iStartIdx=0, iEndIdx=-1;           //start/end indexes for drawn objects (cache)
     static int iSelectedIndex=-1;                 //current selected index
-    static int iMouseX=0,iMouseY=0;               //last mouse position
+    static int iMouseX=0,iMouseY=0;               //last mouse position (pixels)
     static int iFontSize=0;
-    static int iDragStartX,iDragStartY;           //position where drag started (if dragging)
-    static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging)
+    static int iDragStartX,iDragStartY;           //position where drag started (if dragging) (pixels)
+    static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging) (pixels)
     static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
     static RECT tResizeCancelRc;                  //original rectangle of the resized object
     static char bResizing=0, bLastSizeSide=0;     //0=no resize, n=resize side // current cursor
@@ -103,15 +113,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //initialize file name
         strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
-        int iPosY=8, iPosX=0 , iObjCount = 0;
+        int iPosY=8/_GridSize, iPosX=0 , iObjCount = 0;
         { //sample string
             ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
             _with( aObject(iObjCount) ) {
-                w->iX = 8           ; w->iW = 128;
-                w->iY = iPosY       ; w->iH = 48;
+                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
+                w->iY = iPosY       ; w->iH = 48/_GridSize;
                 w->iClassID = idClsString;
                 strncpy( w->zName , "MyString" , _countof(w->zName) );
-                iPosY += w->iH+24;
+                iPosY += w->iH+24/_GridSize;
             } _endwith;
             _with( aObject_Content(iObjCount,ClsStringStruct) ) {
                 w->iLength = 11; w->iBuffer = 12;
@@ -122,11 +132,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         { //sample device
             ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
             _with( aObject(iObjCount) ) {
-                w->iX = 8           ; w->iW = 128;
-                w->iY = iPosY       ; w->iH = 48;
+                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
+                w->iY = iPosY       ; w->iH = 48/_GridSize;
                 w->iClassID = idClsStdOut;
                 strncpy( w->zName , "STDOUT" , _countof(w->zName) );
-                iPosY += w->iH+8;
+                iPosY += w->iH+8/_GridSize;
             } _endwith;
             _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
             } _endwith;
@@ -152,19 +162,19 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
-        int iPosY=10, iObjCount = 0;
+        int iPosY=8/_GridSize, iObjCount = 0;
         for (int iN = 0 ; iN < _rnd(_MaxAllocationGap) ; iN++) {
-            int iPosX=_rnd(16)*8;
+            int iPosX=_rnd(16);
             if (rand()&1) { //sample string
-                int iLen = 1+_rnd(16), iWid = 48+iLen*8;
+                int iLen = 1+_rnd(16), iWid = 48/_GridSize+iLen;
                 if (iWid > 255) iWid = 255;
                 ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+iLen+1);
                 _with( aObject(iObjCount) ) {
                     w->iX = iPosX       ; w->iW = iWid;
-                    w->iY = iPosY       ; w->iH = 48+_rnd(4)*8;
+                    w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
                     w->iClassID = idClsString;
                     sprintf( w->zName , "Str%02d:%02d" , iLen , iObjCount );
-                    iPosY += w->iH+(1+_rnd(4))*8;
+                    iPosY += w->iH+(1+_rnd(4));
                 } _endwith
                 _with( aObject_Content(iObjCount,ClsStringStruct) ) {
                     w->iLength = iLen; w->iBuffer = iLen+1;
@@ -176,11 +186,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             } else { //sample device
                 ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
                 _with( aObject(iObjCount) ) {
-                    w->iX = iPosX       ; w->iW = 128;
-                    w->iY = iPosY       ; w->iH = 48+_rnd(4)*8;
+                    w->iX = iPosX       ; w->iW = 128/_GridSize;
+                    w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
                     w->iClassID = idClsStdOut;
                     sprintf( w->zName , "STDOUT%02d" , iObjCount );
-                    iPosY += w->iH+(1+_rnd(4))*8;
+                    iPosY += w->iH+(1+_rnd(4));
                 } _endwith
                 _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
                     //
@@ -259,8 +269,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iMaxX = iMaxY = -1;
             for (int i=0 ; i < iObjCount ; i++ ) {
                 _with( aObject(i) ) {
-                    if ((w->iX+w->iW) > iMaxX) { iMaxX = (w->iX+w->iW); iMaxXIdx=i; }
-                    if ((w->iY+w->iH) > iMaxY) { iMaxY = (w->iY+w->iH); iMaxYIdx=i; }
+                    if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW); iMaxXIdx=i; }
+                    if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH); iMaxYIdx=i; }
                 } _endwith;
             }
         }
@@ -302,7 +312,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         for ( ; iStartIdx>0 ; iStartIdx-- ) {
             _with( aObject(iStartIdx-1) ) {
-                if ((w->iY+w->iH-iViewY) < 0) { break; }
+                if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { break; }
             } _endwith;
         }
 
@@ -319,22 +329,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (iIndex < (iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
                     //check/skip if item is invisible (caused by moving or scroll down)
-                    if ((w->iY+w->iH-iViewY) < 0) { iStartIdx += 1 ; continue ; }
+                    if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { iStartIdx += 1 ; continue ; }
                 } _endwith
             }
             _with( aObject(iIndex) ) {
                 //clculate position Y and see if it's after the visible area (early stop)
-                int iPosY = w->iY-iViewY, iPosX = w->iX-iViewX;
+                int iPosY = _Grid2Pix(w->iY)-iViewY, iPosX = _Grid2Pix(w->iX)-iViewX;
                 if (iPosY >= iBufHei) { break; }
                 //skip object if outside horizontal range
-                if ( (iPosX+w->iW) < 0 || iPosX >= iBufWid ) { continue; }
+                if ( (iPosX+_Grid2Pix(w->iW)) < 0 || iPosX >= iBufWid ) { continue; }
 
                 //draw connection
                 if ((iIndex < (iObjCount-1)) && g_ClassInterface[w->iClassID].bOutPins) {
                     int iXX, iYY, bInPins;
-                    const int iX=iPosX+(w->iW/2), iY = iPosY+(w->iH)+iFontHeight/2;
+                    const int iX=iPosX+_Grid2Pix(w->iW)/2, iY = iPosY+_Grid2Pix(w->iH)+iFontHeight/2;
                     _with( aObject(iIndex+1) ) {
-                        iXX = w->iX-iViewX+w->iW/2; iYY = w->iY-iViewY-(iFontHeight*2)/5;
+                        iXX = _Grid2Pix(w->iX)-iViewX+_Grid2Pix(w->iW)/2; iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
                         bInPins = g_ClassInterface[w->iClassID].bInPins;
                     } _endwith;
                     if (bInPins) {
@@ -353,7 +363,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
                 //render object
                 SelectObject( hdc , hbObject[ w->iClassID ] );
-                RECT tObjRc = {iPosX,iPosY,iPosX+w->iW,iPosY+w->iH};
+                RECT tObjRc = {iPosX,iPosY,iPosX+_Grid2Pix(w->iW),iPosY+_Grid2Pix(w->iH)};
                 RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
 
                 //border if selected (single select)
@@ -434,7 +444,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         int iNew;
         for (iNew = iObjCount ; iNew > 0 ; iNew--) {
             _with( aObject(iNew-1) ) {
-              if ((w->iY) < iPosY) { break; }
+              if ((_Grid2Pix(w->iY)) < iPosY) { break; }
               ptOrder[iNew] = ptOrder[iNew-1];
             } _endwith;
         }
@@ -443,15 +453,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
         ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
-            w->iX = iPosX; w->iW = 80;
-            w->iY = iPosY; w->iH = 36;k
+            w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
+            w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
             w->iClassID = iClassID;
             sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
             _with( aObject_Content(iNew,ClsStringStruct) ) {
                 w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
             } _endwith;
-            if ((w->iX+w->iW) > iMaxX) { iMaxX = w->iX+w->iW ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
-            if ((w->iY+w->iH) > iMaxY) { iMaxY = w->iY+w->iH ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
         iObjCount++; iObjTotal++;
         iSelectedIndex = iNew;
@@ -468,8 +478,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //grab end of X,Y to check if it was at limit of view area
         int iXX,iYY;
         _with( aObject(iIndex) ) {
-            iXX = w->iX + w->iW;
-            iYY = w->iY + w->iH;
+            iXX = _Grid2Pix(w->iX + w->iW);
+            iYY = _Grid2Pix(w->iY + w->iH);
             w->iW = 0;
         } _endwith;
 
@@ -492,12 +502,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if ( !iObjCount ) { iSelectedIndex = -1; }
             if (iSelectedIndex >= 0) {
                 _with( aObject(iSelectedIndex) ) {
-                    if ( (w->iY-iViewY) < 0 || (w->iY+w->iH-iViewY) > iBufHei ) {
+                    if ( (_Grid2Pix(w->iY)-iViewY) < 0 || (_Grid2Pix(w->iY+w->iH)-iViewY) > iBufHei ) {
                         //printf("New auto select: %i -> %i,%i\n" ,  iSelectedIndex , w->iX , w->iY);
-                        SendMessage( hwnd , WM_VSCROLL , SB_THUMBTRACK , w->iY-(iBufHei/2) );
+                        SendMessage( hwnd , WM_VSCROLL , SB_THUMBTRACK , _Grid2Pix(w->iY)-(iBufHei/2) );
                     }
-                    if ( (w->iX-iViewX) < 0 || (w->iX+w->iW-iViewX) > iBufWid ) {
-                        SendMessage( hwnd , WM_HSCROLL , SB_THUMBTRACK , w->iX-(iBufWid/2) );
+                    if ( (_Grid2Pix(w->iX)-iViewX) < 0 || (_Grid2Pix(w->iX+w->iW)-iViewX) > iBufWid ) {
+                        SendMessage( hwnd , WM_HSCROLL , SB_THUMBTRACK , _Grid2Pix(w->iX)-(iBufWid/2) );
                     }
                 } _endwith;
             } //endif
@@ -583,8 +593,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
             _with( aObject(iCachedIndex) ) {
                 const RECT tRc = {
-                    .left  = (w->iX-iViewX)-cBlkBrd       , .top    = (w->iY-iViewY)-cBlkBrd ,
-                    .right = (w->iX-iViewX+w->iW)+cBlkBrd , .bottom = (w->iY-iViewY+w->iH)+cBlkBrd };
+                    .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd ,
+                    .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd };
                 if (PtInRect( &tRc , pt )) {
                     if (pRect) *pRect = tRc;
                     return iCachedIndex;
@@ -594,7 +604,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //otherwise, scan all objects
         for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
             _with( aObject(iIndex) ) {
-                const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                const RECT tRc = {
+                    .left   = _Grid2Pix(w->iX)-iViewX ,
+                    .top    = _Grid2Pix(w->iY)-iViewY ,
+                    .right  = _Grid2Pix(w->iX+w->iW)-iViewX ,
+                    .bottom = _Grid2Pix(w->iY+w->iH)-iViewY
+                };
                 if (PtInRect( &tRc , pt )) {
                     if (pRect) *pRect = tRc;
                     return iCachedIndex = iIndex;
@@ -612,18 +627,23 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (bResizing) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
             pbCurCursor = 0; bLastSizeSide = rsNone; //reset cursor
             //if dragging show moving cursor
-            if (bDragging==2) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
+            if (bDragging>1) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
             //if not check if hovering over a visible object
             const POINT pt = { iMouseX , iMouseY }; RECT tRc;
             int iIndex = ObjectFromPoint( pt , &tRc );
             if (iIndex >= 0) {
                 _with( aObject(iIndex) ) {
-                    const RECT tRc = { .left = w->iX-iViewX , .top = w->iY-iViewY , .right = w->iX-iViewX+w->iW , .bottom = w->iY-iViewY+w->iH };
+                    const RECT tRc = {
+                        .left   = _Grid2Pix(w->iX)-iViewX ,
+                        .top    = _Grid2Pix(w->iY)-iViewY ,
+                        .right  = _Grid2Pix(w->iX+w->iW)-iViewX ,
+                        .bottom = _Grid2Pix(w->iY+w->iH)-iViewY
+                    };
                     if (PtInRect( &tRc , pt )) {
                         char bSides = 0;
                         pbCurCursor = IDC_HAND; //default cursor
                         //if object is selected and mouse is near an edge to set resize cursor
-                        if ( iSelectedIndex == iIndex) {
+                        if (1) { //} iSelectedIndex == iIndex) {
                             if (pt.x < tRc.left+6)   { bLastSizeSide |= rsLeft; }
                             if (pt.x > tRc.right-6)  { bLastSizeSide |= rsRight; }
                             if (pt.y < tRc.top+6)    { bLastSizeSide |= rsTop; }
@@ -655,16 +675,16 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 _with( aObject(iSelectedIndex) ) {
                     //calculate new position/size (adjusted to grid, for bResizing sides)
                     //if left or top, adjust new position, if right or bottom, adjust new size
-                    int iL=w->iX, iT=w->iY, iW = w->iW , iH = w->iH;
-                    if (bResizing & rsLeft)   { iL = ((iMouseX+iViewX) & (~7)); iW += (w->iX-iL); }
-                    if (bResizing & rsTop)    { iT = ((iMouseY+iViewY) & (~7)); iH += (w->iY-iT); }
-                    if (bResizing & rsRight)  { iW = ((iMouseX+iViewX-iL)+4) & (~7); } //4 = Half GridSize
-                    if (bResizing & rsBottom) { iH = ((iMouseY+iViewY-iT)+4) & (~7); }
+                    int iL=(w->iX)  , iT=(w->iY), iW = (w->iW), iH = (w->iH);
+                    if (bResizing & rsLeft)   { iL = _Pix2Grid((iMouseX+iViewX)); iW += (w->iX-iL); }
+                    if (bResizing & rsTop)    { iT = _Pix2Grid((iMouseY+iViewY)); iH += (w->iY-iT); }
+                    if (bResizing & rsRight)  { iW = _Pix2Grid((iMouseX+iViewX+(_GridSize/2)))-iL; } //4 = Half GridSize
+                    if (bResizing & rsBottom) { iH = _Pix2Grid((iMouseY+iViewY+(_GridSize/2)))-iT; }
                     if (iL<0) { iL = 0; }; if (iT<0) { iT = 0; }
-                    if (iW < 80) { if (bResizing & rsLeft) { iL = w->iX+w->iW-80; } ; iW = 80; }
-                    else if (iW > 248) { if (bResizing & rsLeft) { iL = w->iX+w->iW-248; } ; iW = 248; }
-                    if (iH < 36) { if (bResizing & rsTop)  { iT = w->iY+w->iH-36; } ; iH = 36; }
-                    else if (iH > 248) { if (bResizing & rsTop)  { iT = w->iY+w->iH-248; } ; iH = 248; }
+                    if (iW < _BlkMinWid) { if (bResizing & rsLeft) { iL = w->iX+w->iW-_BlkMinWid; } ; iW = _BlkMinWid; }
+                    else if (iW > _BlkMaxWid) { if (bResizing & rsLeft) { iL = w->iX+w->iW-_BlkMaxWid; } ; iW = _BlkMaxWid; }
+                    if (iH < _BlkMinHei) { if (bResizing & rsTop)  { iT = w->iY+w->iH-_BlkMinHei; } ; iH = _BlkMinHei; }
+                    else if (iH > _BlkMaxHei) { if (bResizing & rsTop)  { iT = w->iY+w->iH-_BlkMaxHei; } ; iH = _BlkMaxHei; }
                     if ( (iL != w->iX) || (iT != w->iY) || (iW != w->iW) || (iH != w->iH) ) { //update position/size
                         if ( (iL != w->iX) || (iT != w->iY) ) { bMoved = 1; iNewX = iL; iNewY = iT; }
                         w->iX = iL; w->iY = iT; w->iW = iW; w->iH = iH;
@@ -675,13 +695,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             //check if moved enough to start a drag, to active it and backup initial position
             if ((bDragging==1) && ((abs(iMouseX-iDragStartX)>3) || (abs(iMouseY-iDragStartY)>3))) {
-                iDragCancelX = aObject(iSelectedIndex).iX; iDragCancelY = aObject(iSelectedIndex).iY; bDragging = 2;
+                iDragCancelX = _Grid2Pix(aObject(iSelectedIndex).iX);
+                iDragCancelY = _Grid2Pix(aObject(iSelectedIndex).iY);
+                bDragging = 2; SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) );
             }
             //if dragging move the block aligned to the grid;
             if (bDragging==2) {
                 _with( aObject(iSelectedIndex) ) {
-                    iNewX = ((iDragCancelX+(iMouseX-iDragStartX))+3) & ~7;
-                    iNewY = ((iDragCancelY+(iMouseY-iDragStartY))+3) & ~7;
+                    iNewX = _Pix2Grid((iDragCancelX+(iMouseX-iDragStartX))+3);
+                    iNewY = _Pix2Grid((iDragCancelY+(iMouseY-iDragStartY))+3);
                     if (iNewX<0) { iNewX = 0; }; if (iNewY<0) { iNewY = 0; }
                     if ((iNewX != w->iX) || (iNewY != w->iY)) {
                         w->iX = iNewX; w->iY= iNewY; bMoved = 1;
@@ -708,8 +730,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 } //wend
                 _with( aObject(iSelectedIndex) ) {
                     bool bUpdate=0;
-                    if ((w->iX+w->iW) > iMaxX) { iMaxX = (w->iX+w->iW); iMaxXIdx=iSelectedIndex; bUpdate=true; }
-                    if ((w->iY+w->iH) > iMaxY) { iMaxY = (w->iY+w->iH); iMaxYIdx=iSelectedIndex; bUpdate=true; }
+                    if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW); iMaxXIdx=iSelectedIndex; bUpdate=true; }
+                    if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH); iMaxYIdx=iSelectedIndex; bUpdate=true; }
                     if (bUpdate) { ScrollUpdate(hwnd,-1,-1); }
                 } _endwith;
                 // if mouse is outside of visible area then scroll it
@@ -917,6 +939,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 case VK_LEFT  : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0); }
                 case VK_RIGHT : { return SendMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0); }
                 case VK_INSERT: {
+                    POINT pt = {.x = iMouseX, .y = iMouseY};
+                    int idx = ObjectFromPoint(pt,NULL);
+                    if (idx != -1) { iClassToAdd = aObject(idx).iClassID;
+                        int iID = GetWindowLong( hwnd , GWL_ID );
+                        SendMessage( GetParent(hwnd) , WM_COMMAND , MAKEWPARAM(iID,0) , iClassToAdd );
+                        return 0;
+                    }
                     if (iClassToAdd < 1) {
                         MessageBox( hwnd , "No class selected" , "Error" , MB_ICONINFORMATION );
                         return 0;
@@ -948,7 +977,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         if (iElapsed<300) {
                             iPrevTime -= 300;
                             printf("Editing %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                            BeginEndEdit( iSelectedIndex , &tRc );                            }
+                            BeginEndEdit( iSelectedIndex , &tRc );
+                            }
                         //return 0;
                     }
                 } _endwith;
@@ -1010,3 +1040,6 @@ void Diagram_Init( HINSTANCE hinstance ) {
     };
     if ( !RegisterClass( &wcls ) ) { puts("Failed to register Diagram Control"); }
 }
+
+#undef _Grid2Pix
+#undef _Pix2Grid
