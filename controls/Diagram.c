@@ -60,6 +60,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
+    typedef enum { //pin type
+        pinNone    = 0,
+        pinInput   = 4,
+        pinOutput  = 5,
+        pinExec    = 6,
+        pinReserve = 7,
+    } PinType;
 
     static HBITMAP hBmBuffer;
     static HFONT hCtlFont,hSmallFont,hSmallFontB,hSymFont;
@@ -69,6 +76,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;
     static HBRUSH hbBack , hbBackGrid , hbObject[256] = {0} ;
     static HPEN hpSelected;
+    static char* IDC_CONNECT = MAKEINTRESOURCE(32631);
 
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
@@ -89,6 +97,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
     static RECT tResizeCancelRc;                  //original rectangle of the resized object
     static char bResizing=0, bLastSizeSide=0;     //0=no resize, n=resize side // current cursor
+    static unsigned char bLastPin=0, bPrevPin=0;  //last/previous pin state (for pin highlighting)
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
@@ -382,27 +391,31 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 DrawText( hdc , g_ClassInterface[w->iClassID].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
 
                 SelectObject( hDcBuffer , hSymFont );
+                //printf("raw=%02X , PinType=%d , PinNum=%d\n", (int)bLastPin, (int)bLastPin>>5, (int)bLastPin&0x1F);
                 { // draw input pins
-                    SetTextColor( hDcBuffer , RGB( 128 , 0 , 0 ) );
                     SetTextAlign( hDcBuffer , TA_CENTER |TA_BOTTOM );
                     int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iPinSpace = (iWid)/(iPinCnt+1);
-                    for (int i=iPinSpace+(iFontWidth/4) ; iPinCnt-- ; i += iPinSpace) {
+                    int iPinNum=((bLastPin>>5)==pinInput) ? (bLastPin&0x1F)+1 : 0;
+                    for (int i=iPinSpace+(iFontWidth/4),n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
+                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 224 , 0 , 0 ) : RGB( 128 , 0 , 0 ) );
                         TextOut( hdc , tObjRc.left+i , tObjRc.top+iFontHeight/4 , "\x88" , 1 );
                     }
                 }
                 { // draw output pins
-                    SetTextColor( hDcBuffer , RGB( 0 , 128 , 0 ) );
                     SetTextAlign( hDcBuffer , TA_CENTER |TA_TOP );
                     int iPinCnt=g_ClassInterface[w->iClassID].bOutPins, iPinSpace = (iWid)/(iPinCnt+1);
-                    for (int i=iPinSpace ; iPinCnt-- ; i += iPinSpace) {
+                    int iPinNum=((bLastPin>>5)==pinOutput) ? (bLastPin&0x1F)+1 : 0;
+                    for (int i=iPinSpace,n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
+                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 0 , 192 , 0 ) : RGB( 0 , 128 , 0 ) );
                         TextOut( hdc , tObjRc.left+i , tObjRc.bottom , "\x98" , 1 ); //-iFontHeight/4
                     }
                 }
                 { // draw exec pins
-                    SetTextColor( hDcBuffer , RGB( 0 , 0 , 128 ) );
                     SetTextAlign( hDcBuffer , TA_LEFT );
                     int iPinCnt=g_ClassInterface[w->iClassID].bExecPins, iPinSpace = (iHei)/(iPinCnt+1);
-                    for (int i=iPinSpace-iFontHeight/2 ; iPinCnt-- ; i += iPinSpace) {
+                    int iPinNum=((bLastPin>>5)==pinExec) ? (bLastPin&0x1F)+1 : 0;
+                    for (int i=iPinSpace-iFontHeight/2,n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
+                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 0 , 0 , 255 ) : RGB( 0 , 0 , 128 ) );
                         TextOut( hdc , tObjRc.right-2 , tObjRc.top+i , "\xB2" , 1 ); //-iFontHeight/4
                     }
                 }
@@ -593,8 +606,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
             _with( aObject(iCachedIndex) ) {
                 const RECT tRc = {
-                    .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd ,
-                    .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd };
+                    .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
+                    .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2 };
                 if (PtInRect( &tRc , pt )) {
                     if (pRect) *pRect = tRc;
                     return iCachedIndex;
@@ -605,12 +618,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
             _with( aObject(iIndex) ) {
                 const RECT tRc = {
-                    .left   = _Grid2Pix(w->iX)-iViewX ,
-                    .top    = _Grid2Pix(w->iY)-iViewY ,
-                    .right  = _Grid2Pix(w->iX+w->iW)-iViewX ,
-                    .bottom = _Grid2Pix(w->iY+w->iH)-iViewY
+                    .left   = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2 ,
+                    .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
+                    .right  = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 ,
+                    .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2
                 };
                 if (PtInRect( &tRc , pt )) {
+                    //printf("found %d\n", iIndex);
                     if (pRect) *pRect = tRc;
                     return iCachedIndex = iIndex;
                 }
@@ -625,7 +639,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_SETCURSOR: {
             //keep resizing cursor active while resizing
             if (bResizing) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
-            pbCurCursor = 0; bLastSizeSide = rsNone; //reset cursor
+            pbCurCursor = 0; bLastSizeSide = rsNone; bLastPin = 0; //reset cursor
             //if dragging show moving cursor
             if (bDragging>1) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
             //if not check if hovering over a visible object
@@ -639,22 +653,45 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         .right  = _Grid2Pix(w->iX+w->iW)-iViewX ,
                         .bottom = _Grid2Pix(w->iY+w->iH)-iViewY
                     };
-                    if (PtInRect( &tRc , pt )) {
+                    if (1) /*(PtInRect( &tRc , pt ))*/ {
                         char bSides = 0;
                         pbCurCursor = IDC_HAND; //default cursor
-                        //if object is selected and mouse is near an edge to set resize cursor
+                        //if mouse is near an edge to set resize cursor
                         if (1) { //} iSelectedIndex == iIndex) {
                             if (pt.x < tRc.left+6)   { bLastSizeSide |= rsLeft; }
                             if (pt.x > tRc.right-6)  { bLastSizeSide |= rsRight; }
                             if (pt.y < tRc.top+6)    { bLastSizeSide |= rsTop; }
                             if (pt.y > tRc.bottom-6) { bLastSizeSide |= rsBottom; }
                             if (bLastSizeSide) {
-                                static char* const pbSideToCursor[] = {
-                                    [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
-                                    [rsTop]  = IDC_SIZENS, [rsBottom] = IDC_SIZENS,
-                                    [rsTop|rsLeft]    = IDC_SIZENWSE, [rsTop|rsRight]    = IDC_SIZENESW,
-                                    [rsBottom|rsLeft] = IDC_SIZENESW, [rsBottom|rsRight] = IDC_SIZENWSE };
-                                pbCurCursor = pbSideToCursor[bLastSizeSide];
+                                int iWid = tRc.right-tRc.left, iHei = tRc.bottom-tRc.top;
+                                //if the edge contains a pin set the cursor to "connect"
+                                if ( ( bLastSizeSide & rsTop ) && (pt.y <= tRc.top) ) { //check for input pins
+                                    int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iPinSpace = (iWid)/(iPinCnt+1);
+                                    for (int i=tRc.left+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
+                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0x80+n; break; }
+                                    }
+                                }
+                                if ( ( bLastSizeSide & rsBottom ) && (pt.y >= tRc.bottom) ) { //check for output pins
+                                    int iPinCnt=g_ClassInterface[w->iClassID].bOutPins, iPinSpace = (iWid)/(iPinCnt+1);
+                                    for (int i=tRc.left+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
+                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0xA0+n; break; }
+                                    }
+                                }
+                                if ( ( bLastSizeSide & rsRight ) && (pt.x >= tRc.right) ) { //check for exec pins
+                                    int iPinCnt=g_ClassInterface[w->iClassID].bExecPins, iPinSpace = (iHei)/(iPinCnt+1);
+                                    for (int i=tRc.top+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
+                                        if (abs(pt.y-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0xC0+n; break; }
+                                    }
+                                }
+                                if (bLastSizeSide) {
+                                    //otherwise set the cursor to "resize"
+                                    static char* const pbSideToCursor[] = {
+                                        [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
+                                        [rsTop]  = IDC_SIZENS, [rsBottom] = IDC_SIZENS,
+                                        [rsTop|rsLeft]    = IDC_SIZENWSE, [rsTop|rsRight]    = IDC_SIZENESW,
+                                        [rsBottom|rsLeft] = IDC_SIZENESW, [rsBottom|rsRight] = IDC_SIZENWSE };
+                                    pbCurCursor = pbSideToCursor[bLastSizeSide];
+                                }
                             }
                         }
                         if (pbCurCursor) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
@@ -669,6 +706,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iMouseY = (short)HIWORD(lParam);  // vertical position of cursor
             char bMoved = 0;
             int iNewX,iNewY;
+
+            if (bLastPin != bPrevPin) { bPrevPin = bLastPin; SetUpdate(); }
 
             //if resizing, check sides and adjust new size
             if (bResizing) {
@@ -969,7 +1008,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //printf("%i to %i\n",iStartIdx,iEndIdx);
             const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) }; RECT tRc;
             if ( (iSelectedIndex = ObjectFromPoint( pt , &tRc )) != -1 ) {
-                if (bLastSizeSide) { bResizing = bLastSizeSide; SetCapture(hwnd);return 0; }
+                if (bLastSizeSide) {
+                    bResizing = bLastSizeSide; SetCapture(hwnd);
+                    SetUpdate(); return 0;
+                }
                 _with( aObject(iSelectedIndex) ) {
                     if (iOldSel != iSelectedIndex) {
                         printf("Selected %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
