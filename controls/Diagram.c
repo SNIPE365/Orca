@@ -1,5 +1,5 @@
 #include <windows.h>
-#include <winscard.h>
+//#include <winscard.h>
 
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
@@ -12,13 +12,26 @@ _const _BlkMaxWid = 128; //_Pix2Grid(1024);
 _const _BlkMaxHei = 128; //_Pix2Grid(1024);
 
 typedef struct {
+    union {
+        uint32_t uConnector;
+        struct {
+            uint32_t uIndexHint:14; //max 16383 objects per file
+            uint32_t uUniqueID :14;
+            uint32_t uTargetPin: 4;
+        };
+    };
+} ConnectorStruct;
+
+typedef struct {
     //uint32_t iObjSize;        // Size of the object (do i need that?)
-    uint16_t iClassID;          //+ 2=10 // ObjectClassID of the object
-    int16_t  iY;                //+ 4= 4 // Y position of the object (in grid units)
-    int16_t  iX;                //+ 2= 6 // X position of the object (in grid units)
-    uint8_t  iW,iH;             //+ 2= 8 // Width and height of the object (grid units)
-    uint8_t  bFlags, bResv;     //+ 2=12 // Flags and reserved byte of the object
-    char zName[19], zZero;      //+20=32 // Name (user) of the object and zero terminator
+    uint16_t uUniqueID;         //+ 2= 2 // Unique ID of the object
+    uint16_t iClassID;          //+ 2= 4 // ObjectClassID of the object
+    int16_t  iY;                //+ 2= 6 // Y position of the object (in grid units)
+    int16_t  iX;                //+ 2= 8 // X position of the object (in grid units)
+    uint8_t  iW,iH;             //+ 2= 10 // Width and height of the object (grid units)
+    uint8_t  bFlags, bResv;     //+ 2= 12 // Flags and reserved byte of the object
+    ConnectorStruct tConnector; //+ 4= 16 // Connectors (if .uTargetPin is 0, but .uConnector is not 0) then .uIndexHint points to a list of connectors
+    char zName[19], zZero;      //+20= 32 // Name (user) of the object and zero terminator
     char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
 
@@ -30,6 +43,7 @@ typedef struct {
     //cache members
     int iViewX, iViewY; //in pixels
     int iSelectedIdx;
+    char bUsedIDs[16384/8]; //bitmap of used IDs (1 bit per ID)
 } DiagramFileStruct;
 
 DiagramFileStruct* g_ProjectFiles[256]; int g_ProjectFileCount = 0;
@@ -62,10 +76,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     } DiagramTimers;
     typedef enum { //pin type
         pinNone    = 0,
-        pinInput   = 4,
-        pinOutput  = 5,
-        pinExec    = 6,
-        pinReserve = 7,
+        pinInput   = 1,
+        pinOutput  = 2,
+        pinExec    = 3,
+        pinReserve = 4,
     } PinType;
 
     static HBITMAP hBmBuffer;
@@ -87,9 +101,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object (pixels)
     static int iViewX=0, iViewY=0;                //scrolling offset (pixels)
+    static char bUsedIDs[16384/8];                //bitmap of used IDs (1 bit per ID)
     static int iMaxXIdx=-1 , iMaxYIdx=-1;         //indexes for the objects that have the maximum position (cache)
     static int iStartIdx=0, iEndIdx=-1;           //start/end indexes for drawn objects (cache)
-    static int iSelectedIndex=-1;                 //current selected index
+    static int iSelectedIndex=-1,iHoverIndex=-1;  //current selected index // hovered index
     static int iMouseX=0,iMouseY=0;               //last mouse position (pixels)
     static int iFontSize=0;
     static int iDragStartX,iDragStartY;           //position where drag started (if dragging) (pixels)
@@ -97,7 +112,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
     static RECT tResizeCancelRc;                  //original rectangle of the resized object
     static char bResizing=0, bLastSizeSide=0;     //0=no resize, n=resize side // current cursor
-    static unsigned char bLastPin=0, bPrevPin=0;  //last/previous pin state (for pin highlighting)
+    static char bHoverPin=0, bPrevPin=0;          //last/previous pin state (for pin highlighting)
+    static char bConnectingPin=0, bPinType=0;     //selected pin number/type when adding a connection
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
@@ -107,112 +123,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static const int cBlkBrd = 4;
 
     #include "../components/_basedecl.h"
-
-    DiagramFileStruct* CreateTestDiagram( char* pzName ) {
-
-        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
-
-        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
-        if (!pFile) return NULL;
-
-        pFile->iObjectMaxCount = _MaxAllocationGap;
-        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
-        if (!ptOrder) { free(pFile); return NULL; }
-
-        //initialize file name
-        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
-
-        int iPosY=8/_GridSize, iPosX=0 , iObjCount = 0;
-        { //sample string
-            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
-            _with( aObject(iObjCount) ) {
-                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
-                w->iY = iPosY       ; w->iH = 48/_GridSize;
-                w->iClassID = idClsString;
-                strncpy( w->zName , "MyString" , _countof(w->zName) );
-                iPosY += w->iH+24/_GridSize;
-            } _endwith;
-            _with( aObject_Content(iObjCount,ClsStringStruct) ) {
-                w->iLength = 11; w->iBuffer = 12;
-                strcpy( w->zContent , "Hello World" );
-            } _endwith;
-            iObjCount++;
-        }
-        { //sample device
-            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
-            _with( aObject(iObjCount) ) {
-                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
-                w->iY = iPosY       ; w->iH = 48/_GridSize;
-                w->iClassID = idClsStdOut;
-                strncpy( w->zName , "STDOUT" , _countof(w->zName) );
-                iPosY += w->iH+8/_GridSize;
-            } _endwith;
-            _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
-            } _endwith;
-
-            iObjCount++;
-        }
-
-        pFile->iObjectCount = iObjCount;
-        return pFile;
-
-        //#undef aObject_Content
-    }
-    DiagramFileStruct* CreateRandomTestDiagram( char* pzName ) {
-
-        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
-
-        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
-        if (!pFile) return NULL;
-
-        pFile->iObjectMaxCount = _MaxAllocationGap;
-        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
-        if (!ptOrder) { free(pFile); return NULL; }
-
-        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
-
-        int iPosY=8/_GridSize, iObjCount = 0;
-        for (int iN = 0 ; iN < _rnd(_MaxAllocationGap) ; iN++) {
-            int iPosX=_rnd(16);
-            if (rand()&1) { //sample string
-                int iLen = 1+_rnd(16), iWid = 48/_GridSize+iLen;
-                if (iWid > 255) iWid = 255;
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+iLen+1);
-                _with( aObject(iObjCount) ) {
-                    w->iX = iPosX       ; w->iW = iWid;
-                    w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
-                    w->iClassID = idClsString;
-                    sprintf( w->zName , "Str%02d:%02d" , iLen , iObjCount );
-                    iPosY += w->iH+(1+_rnd(4));
-                } _endwith
-                _with( aObject_Content(iObjCount,ClsStringStruct) ) {
-                    w->iLength = iLen; w->iBuffer = iLen+1;
-                    for (int i = 0 ; i < iLen ; i++) {
-                        w->zContent[i] = (rand()&1) ? 'a' + _rnd(26) : '0' + _rnd(10);
-                    }
-                    w->zContent[iLen] = 0;
-                } _endwith
-            } else { //sample device
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
-                _with( aObject(iObjCount) ) {
-                    w->iX = iPosX       ; w->iW = 128/_GridSize;
-                    w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
-                    w->iClassID = idClsStdOut;
-                    sprintf( w->zName , "STDOUT%02d" , iObjCount );
-                    iPosY += w->iH+(1+_rnd(4));
-                } _endwith
-                _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
-                    //
-                } _endwith
-            }
-            iObjCount++;
-        }
-
-        pFile->iObjectCount = iObjCount;
-        return pFile;
-
-        //#undef aObject_Content
-    }
 
     void GenerateFullCode( int iFileCount , DiagramFileStruct** pFile ) {
         #define emitf(...) iLen += sprintf( pCode+iLen , __VA_ARGS__ )
@@ -267,6 +177,47 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     // ------------- Diagram functions -------------
+
+    int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
+        //if the cached index is correct then great return it and the pin number!
+        _with( aObject(tConnect->uIndexHint) ) {
+            if ( w->uUniqueID == tConnect->uUniqueID ) {
+                *piPinNum = tConnect->uTargetPin;
+                return tConnect->uIndexHint;
+            }
+        } _endwith;
+        //otherwise we search all elements to find its new position
+        for (int i=0 ; i<iObjCount; i++ ) {
+            _with( aObject(i) ) {
+                if ( w->uUniqueID = tConnect->uUniqueID ) {
+                    tConnect->uIndexHint = i;
+                    *piPinNum = tConnect->uTargetPin;
+                    return i;
+                }
+            } _endwith;
+        }
+        //and at least, if reaches here then it's not found
+        if (piPinNum) { *piPinNum = 0; }
+        return -1;
+    }
+    void StartConnectingPin( int iPin ) { //Initiate the drag to connect objects
+        bConnectingPin = iPin;
+        printf("Selected pin %i\n",iPin);
+        _with(aObject(iSelectedIndex)) {
+            int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
+            if (iPin <= iPinCnt) { bPinType = pinInput; puts("Input Pin"); return; }
+            iPinCnt += g_ClassInterface[w->iClassID].bOutPins;
+            if (iPin <= iPinCnt) { bPinType = pinOutput; puts("Output Pin"); return; }
+            iPinCnt += g_ClassInterface[w->iClassID].bExecPins;
+            if (iPin <= iPinCnt) { bPinType = pinExec; puts("Exec Pin"); return; }
+        } _endwith;
+    }
+    void ActConnectingPin( int iObject, int iPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
+        if (!iPin) { if (bAddPin) { puts("Canceled connecting pin"); } return; }
+        printf("%s %i.%i to %i.%i\n",bAddPin?"Connecting":"Checking",iSelectedIndex,bConnectingPin,iObject,iPin);
+        if (bAddPin) { bConnectingPin = 0; }
+    }
+
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
         //if client are is not given... calculate
         if (nWid < 0) {
@@ -333,7 +284,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iFontWidth = tFontSz.cx/3; iFontHeight = iFontSize = tFontSz.cy;
         }
 
-
         for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
             if (iIndex < (iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
@@ -348,24 +298,35 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //skip object if outside horizontal range
                 if ( (iPosX+_Grid2Pix(w->iW)) < 0 || iPosX >= iBufWid ) { continue; }
 
-                //draw connection
-                if ((iIndex < (iObjCount-1)) && g_ClassInterface[w->iClassID].bOutPins) {
-                    int iXX, iYY, bInPins;
-                    const int iX=iPosX+_Grid2Pix(w->iW)/2, iY = iPosY+_Grid2Pix(w->iH)+iFontHeight/2;
-                    _with( aObject(iIndex+1) ) {
-                        iXX = _Grid2Pix(w->iX)-iViewX+_Grid2Pix(w->iW)/2; iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
-                        bInPins = g_ClassInterface[w->iClassID].bInPins;
-                    } _endwith;
-                    if (bInPins) {
-                        for (int iN=0; iN<3; iN++) {
-                            const int iOX = (iN & 1), iOY = (iN/2);
-                            const POINT atBezier[] = {
-                                {iOX+iX         , iOY+iY} ,
-                                {iOX+iX         , iOY+iYY} ,
-                                {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
-                                {iOX+iXX        , iOY+iYY}
-                            };
-                            PolyBezier( hdc , atBezier , 4 );
+                //draw connections
+                if (w->tConnector.uConnector) { //there's connections???
+                    puts("CONNECTIONS");
+                    ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1;
+                    if (!w->tConnector.uTargetPin) { //it's a list instead of a single connection
+                        ptList = NULL; iConCnt = 0; //todo setup storage for connector lists
+                    }
+
+                    for (int iCon=0 ; iCon < iConCnt ; iCon++) {
+                        int iConPin = 0;
+                        int iConIdx = IndexAndPinFromConnector( ptList+iCon , &iConPin );
+                        if (iConIdx < 0) { puts("Internal error drawing connector"); continue; }
+                        int iXX, iYY, bInPins;
+                        const int iX=iPosX+_Grid2Pix(w->iW)/2, iY = iPosY+_Grid2Pix(w->iH)+iFontHeight/2;
+                        _with( aObject(iConIdx) ) {
+                            iXX = _Grid2Pix(w->iX)-iViewX+_Grid2Pix(w->iW)/2; iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
+                            bInPins = g_ClassInterface[w->iClassID].bInPins;
+                        } _endwith;
+                        if (bInPins) {
+                            for (int iN=0; iN<3; iN++) {
+                                const int iOX = (iN & 1), iOY = (iN/2);
+                                const POINT atBezier[] = {
+                                    {iOX+iX         , iOY+iY} ,
+                                    {iOX+iX         , iOY+iYY} ,
+                                    {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
+                                    {iOX+iXX        , iOY+iYY}
+                                };
+                                PolyBezier( hdc , atBezier , 4 );
+                            }
                         }
                     }
                 }
@@ -391,31 +352,29 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 DrawText( hdc , g_ClassInterface[w->iClassID].pzName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_TOP | DT_NOPREFIX );
 
                 SelectObject( hDcBuffer , hSymFont );
-                //printf("raw=%02X , PinType=%d , PinNum=%d\n", (int)bLastPin, (int)bLastPin>>5, (int)bLastPin&0x1F);
+                //printf("raw=%02X , PinType=%d , PinNum=%d\n", (int)bHoverPin, (int)bHoverPin>>5, (int)bHoverPin&0x1F);
+                int iCurPin=(iIndex==iHoverIndex?1:128);
                 { // draw input pins
                     SetTextAlign( hDcBuffer , TA_CENTER |TA_BOTTOM );
                     int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iPinSpace = (iWid)/(iPinCnt+1);
-                    int iPinNum=((bLastPin>>5)==pinInput) ? (bLastPin&0x1F)+1 : 0;
-                    for (int i=iPinSpace+(iFontWidth/4),n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
-                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 224 , 0 , 0 ) : RGB( 128 , 0 , 0 ) );
+                    for (int i=iPinSpace+(iFontWidth/4) ; iPinCnt-- ; i += iPinSpace, iCurPin++) {
+                        SetTextColor( hDcBuffer , (iCurPin==bHoverPin) ? RGB( 224 , 0 , 0 ) : RGB( 128 , 0 , 0 ) );
                         TextOut( hdc , tObjRc.left+i , tObjRc.top+iFontHeight/4 , "\x88" , 1 );
                     }
                 }
                 { // draw output pins
                     SetTextAlign( hDcBuffer , TA_CENTER |TA_TOP );
                     int iPinCnt=g_ClassInterface[w->iClassID].bOutPins, iPinSpace = (iWid)/(iPinCnt+1);
-                    int iPinNum=((bLastPin>>5)==pinOutput) ? (bLastPin&0x1F)+1 : 0;
-                    for (int i=iPinSpace,n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
-                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 0 , 192 , 0 ) : RGB( 0 , 128 , 0 ) );
+                    for (int i=iPinSpace ; iPinCnt-- ; i += iPinSpace, iCurPin++) {
+                        SetTextColor( hDcBuffer , (iCurPin==bHoverPin) ? RGB( 0 , 192 , 0 ) : RGB( 0 , 128 , 0 ) );
                         TextOut( hdc , tObjRc.left+i , tObjRc.bottom , "\x98" , 1 ); //-iFontHeight/4
                     }
                 }
                 { // draw exec pins
                     SetTextAlign( hDcBuffer , TA_LEFT );
                     int iPinCnt=g_ClassInterface[w->iClassID].bExecPins, iPinSpace = (iHei)/(iPinCnt+1);
-                    int iPinNum=((bLastPin>>5)==pinExec) ? (bLastPin&0x1F)+1 : 0;
-                    for (int i=iPinSpace-iFontHeight/2,n=1 ; iPinCnt-- ; i += iPinSpace, n++) {
-                        SetTextColor( hDcBuffer , (iPinNum==n) ? RGB( 0 , 0 , 255 ) : RGB( 0 , 0 , 128 ) );
+                    for (int i=iPinSpace-iFontHeight/2 ; iPinCnt-- ; i += iPinSpace, iCurPin++) {
+                        SetTextColor( hDcBuffer , (iCurPin==bHoverPin) ? RGB( 0 , 0 , 255 ) : RGB( 0 , 0 , 128 ) );
                         TextOut( hdc , tObjRc.right-2 , tObjRc.top+i , "\xB2" , 1 ); //-iFontHeight/4
                     }
                 }
@@ -438,6 +397,21 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         InvalidateRect( hwnd , NULL , true ); //UpdateWindow( hwnd );
         return;
     }; //void DrawWindow(void)
+
+    int ObtainUniqueID() {
+        static int iLastID;
+        for (int i=0; i<16384; i++) {
+            int iID = (iLastID + i) % 16384;
+            if (iID &&!(bUsedIDs[iID/8] & (1<<(iID%8)))) {
+                bUsedIDs[iID/8] |= (1<<(iID%8)); return iLastID=iID;
+            }
+        }
+        return -1;
+    }
+    void ReleaseUniqueID(int iID) {
+        if (iID >= 0) bUsedIDs[iID/8] &= ~(1<<(iID%8));
+    }
+
     int InsertObject( int iPosX , int iPosY , int iClassID ) {
         //increase storage if needed
         if (iObjCount >= iObjMaxCount) {
@@ -463,12 +437,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         //initialize new slot
         _auto pClsInfo = &g_ClassInterface[iClassID];
-        printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
+        //printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
         ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
             w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
             w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
+            w->uUniqueID = ObtainUniqueID();
             w->iClassID = iClassID;
+            w->tConnector.uConnector = 0;
             sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
             _with( aObject_Content(iNew,ClsStringStruct) ) {
                 w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
@@ -540,6 +516,41 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetUpdate();
         return 1;
     }
+    int ObjectFromPoint( POINT pt , /*OUT*/ RECT* pRect ) {
+        static int iCachedIndex = -1;
+        //if no objects, clear cache and return
+        if ((!ptOrder) || ( !iObjCount )) { return iCachedIndex = -1; }
+        //if index is cached and valid, use it first
+        if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
+            _with( aObject(iCachedIndex) ) {
+                const RECT tRc = {
+                    .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
+                    .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2 };
+                if (PtInRect( &tRc , pt )) {
+                    if (pRect) *pRect = tRc;
+                    return iCachedIndex;
+                }
+            } _endwith;
+        }
+        //otherwise, scan all objects
+        for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
+            _with( aObject(iIndex) ) {
+                const RECT tRc = {
+                    .left   = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2 ,
+                    .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
+                    .right  = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 ,
+                    .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2
+                };
+                if (PtInRect( &tRc , pt )) {
+                    //printf("found %d\n", iIndex);
+                    if (pRect) *pRect = tRc;
+                    return iCachedIndex = iIndex;
+                }
+            } _endwith;
+        }
+        return iCachedIndex = -1;
+    }
+
     LRESULT CALLBACK CtlEditProc( HWND hwnd , UINT uMsg , WPARAM wParam , LPARAM lParam ) {
         if ((uMsg == WM_KEYDOWN)) {
             int iID=0;
@@ -583,7 +594,28 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
         }
     }
-    void WriteBackObject() { //save current diagram state back into the file structure
+
+    void RetrieveDiagram( DiagramFileStruct* pNewDiagram ) { //update current diagram state from the new file structure
+        if (pNewDiagram) {
+            SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
+            pDiagram = pNewDiagram;
+            _with( *pDiagram ) {
+                ptOrder = w->pObjects;
+                iObjCount = w->iObjectCount; iObjMaxCount = w->iObjectMaxCount;
+                //restore from cached (when it makes sense)
+                iSelectedIndex = w->iSelectedIdx;
+                iMaxXIdx = iMaxYIdx = -1;
+                iStartIdx = 0 ; iEndIdx = -1;
+                iViewX = w->iViewX; iViewY = w->iViewY;
+                ScrollUpdate( hwnd , -1 , -1 );
+                tInfo.nPos = iViewX ; SetScrollInfo( hwnd , SB_HORZ , &tInfo , TRUE );
+                tInfo.nPos = iViewY ; SetScrollInfo( hwnd , SB_VERT , &tInfo , TRUE );
+                memcpy( bUsedIDs , w->bUsedIDs , sizeof(bUsedIDs) );
+                SetUpdate();
+            } _endwith
+        }
+    }
+    void WriteBackDiagram() { //save current diagram state back into the file structure
         if (pDiagram) {
             _with( *pDiagram ) {
                 w->pObjects = ptOrder;
@@ -593,44 +625,122 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 w->iViewX = iViewX;
                 w->iViewY = iViewY;
                 w->iSelectedIdx = iSelectedIndex;
+                memcpy( w->bUsedIDs , bUsedIDs , sizeof(bUsedIDs) );
                 //GetScrollInfo( hwnd , SB_HORZ , &tInfo); w->iPosH = tInfo.nPos;
                 //GetScrollInfo( hwnd , SB_VERT , &tInfo); w->iPosV = tInfo.nPos;
             } _endwith
         }
     }
-    int ObjectFromPoint( POINT pt , /*OUT*/ RECT* pRect ) {
-        static int iCachedIndex = -1;
-        //if no objects, clear cache and return
-        if ((!ptOrder) || ( !iObjCount )) { return iCachedIndex = -1; }
-        //if index is cached and valid, use it first
-        if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
-            _with( aObject(iCachedIndex) ) {
-                const RECT tRc = {
-                    .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
-                    .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2 };
-                if (PtInRect( &tRc , pt )) {
-                    if (pRect) *pRect = tRc;
-                    return iCachedIndex;
-                }
+
+    DiagramFileStruct* CreateTestDiagram( char* pzName ) {
+
+        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
+
+        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
+        if (!pFile) return NULL;
+
+        pFile->iObjectMaxCount = _MaxAllocationGap;
+        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
+        if (!ptOrder) { free(pFile); return NULL; }
+
+        //initialize file name
+        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
+
+        int iPosY=8/_GridSize, iPosX=0 , iObjCount = 0;
+        { //sample string
+            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
+            _with( aObject(iObjCount) ) {
+                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
+                w->iY = iPosY       ; w->iH = 48/_GridSize;
+                w->iClassID = idClsString;
+                w->tConnector.uConnector = 0;
+                w->uUniqueID = ObtainUniqueID();
+                strncpy( w->zName , "MyString" , _countof(w->zName) );
+                iPosY += w->iH+24/_GridSize;
             } _endwith;
-        }
-        //otherwise, scan all objects
-        for ( int iIndex = iEndIdx ; iIndex>=iStartIdx ; iIndex-- ) {
-            _with( aObject(iIndex) ) {
-                const RECT tRc = {
-                    .left   = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2 ,
-                    .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
-                    .right  = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 ,
-                    .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2
-                };
-                if (PtInRect( &tRc , pt )) {
-                    //printf("found %d\n", iIndex);
-                    if (pRect) *pRect = tRc;
-                    return iCachedIndex = iIndex;
-                }
+            _with( aObject_Content(iObjCount,ClsStringStruct) ) {
+                w->iLength = 11; w->iBuffer = 12;
+                strcpy( w->zContent , "Hello World" );
             } _endwith;
+            iObjCount++;
         }
-        return iCachedIndex = -1;
+        { //sample device
+            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+            _with( aObject(iObjCount) ) {
+                w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
+                w->iY = iPosY       ; w->iH = 48/_GridSize;
+                w->uUniqueID = ObtainUniqueID();
+                w->tConnector.uConnector = 0;
+                w->iClassID = idClsStdOut;
+                strncpy( w->zName , "STDOUT" , _countof(w->zName) );
+                iPosY += w->iH+8/_GridSize;
+            } _endwith;
+            _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
+            } _endwith;
+
+            iObjCount++;
+        }
+
+        pFile->iObjectCount = iObjCount;
+        return pFile;
+
+        //#undef aObject_Content
+    }
+    DiagramFileStruct* CreateRandomTestDiagram( char* pzName ) {
+
+        //#define aObject_Content(_I,_T) (*((_T*)(pObjects[_I]->Content)))
+
+        DiagramFileStruct* pFile = calloc( 1 , sizeof( DiagramFileStruct ) );
+        if (!pFile) return NULL;
+
+        pFile->iObjectMaxCount = _MaxAllocationGap;
+        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
+        if (!ptOrder) { free(pFile); return NULL; }
+
+        strncpy( pFile->zName , pzName , _countof(pFile->zName) );
+
+        int iPosY=8/_GridSize, iObjCount = 0;
+        for (int iN = 0 ; iN < _rnd(_MaxAllocationGap) ; iN++) {
+            int iPosX=_rnd(16);
+            if (rand()&1) { //sample string
+                int iLen = 1+_rnd(16), iWid = 48/_GridSize+iLen;
+                if (iWid > 255) iWid = 255;
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+iLen+1);
+                _with( aObject(iObjCount) ) {
+                    w->iX = iPosX ; w->iW = iWid;
+                    w->iY = iPosY ; w->iH = 48/_GridSize+_rnd(4);
+                    w->tConnector.uConnector = 0;
+                    w->iClassID = idClsString;
+                    sprintf( w->zName , "Str%02d:%02d" , iLen , iObjCount );
+                    iPosY += w->iH+(1+_rnd(4));
+                } _endwith
+                _with( aObject_Content(iObjCount,ClsStringStruct) ) {
+                    w->iLength = iLen; w->iBuffer = iLen+1;
+                    for (int i = 0 ; i < iLen ; i++) {
+                        w->zContent[i] = (rand()&1) ? 'a' + _rnd(26) : '0' + _rnd(10);
+                    }
+                    w->zContent[iLen] = 0;
+                } _endwith
+            } else { //sample device
+                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+                _with( aObject(iObjCount) ) {
+                    w->iX = iPosX       ; w->iW = 128/_GridSize;
+                    w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
+                    w->iClassID = idClsStdOut;
+                    sprintf( w->zName , "STDOUT%02d" , iObjCount );
+                    iPosY += w->iH+(1+_rnd(4));
+                } _endwith
+                _with( aObject_Content(iObjCount,ClsStdOutStruct) ) {
+                    //
+                } _endwith
+            }
+            iObjCount++;
+        }
+
+        pFile->iObjectCount = iObjCount;
+        return pFile;
+
+        //#undef aObject_Content
     }
 
     // ------------- Message dispatch --------------
@@ -639,12 +749,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_SETCURSOR: {
             //keep resizing cursor active while resizing
             if (bResizing) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
-            pbCurCursor = 0; bLastSizeSide = rsNone; bLastPin = 0; //reset cursor
+            pbCurCursor = 0; bLastSizeSide = rsNone; bHoverPin = 0; //reset cursor
             //if dragging show moving cursor
             if (bDragging>1) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
             //if not check if hovering over a visible object
             const POINT pt = { iMouseX , iMouseY }; RECT tRc;
-            int iIndex = ObjectFromPoint( pt , &tRc );
+            int iIndex = iHoverIndex = ObjectFromPoint( pt , &tRc );
             if (iIndex >= 0) {
                 _with( aObject(iIndex) ) {
                     const RECT tRc = {
@@ -664,23 +774,26 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                             if (pt.y > tRc.bottom-6) { bLastSizeSide |= rsBottom; }
                             if (bLastSizeSide) {
                                 int iWid = tRc.right-tRc.left, iHei = tRc.bottom-tRc.top;
+                                int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iCurPin=1;
                                 //if the edge contains a pin set the cursor to "connect"
                                 if ( ( bLastSizeSide & rsTop ) && (pt.y <= tRc.top) ) { //check for input pins
-                                    int iPinCnt=g_ClassInterface[w->iClassID].bInPins, iPinSpace = (iWid)/(iPinCnt+1);
+                                    int iPinSpace = (iWid)/(iPinCnt+1);
                                     for (int i=tRc.left+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
-                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0x80+n; break; }
+                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bHoverPin=iCurPin+n; break; }
                                     }
                                 }
+                                iCurPin += iPinCnt; iPinCnt=g_ClassInterface[w->iClassID].bOutPins;
                                 if ( ( bLastSizeSide & rsBottom ) && (pt.y >= tRc.bottom) ) { //check for output pins
-                                    int iPinCnt=g_ClassInterface[w->iClassID].bOutPins, iPinSpace = (iWid)/(iPinCnt+1);
+                                    int iPinSpace = (iWid)/(iPinCnt+1);
                                     for (int i=tRc.left+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
-                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0xA0+n; break; }
+                                        if (abs(pt.x-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bHoverPin=iCurPin+n; break; }
                                     }
                                 }
+                                iCurPin += iPinCnt; iPinCnt=g_ClassInterface[w->iClassID].bExecPins;
                                 if ( ( bLastSizeSide & rsRight ) && (pt.x >= tRc.right) ) { //check for exec pins
-                                    int iPinCnt=g_ClassInterface[w->iClassID].bExecPins, iPinSpace = (iHei)/(iPinCnt+1);
+                                    int iPinSpace = (iHei)/(iPinCnt+1);
                                     for (int i=tRc.top+iPinSpace+(iFontSize/4),n=0 ; iPinCnt-- ; i += iPinSpace, n++) {
-                                        if (abs(pt.y-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bLastPin=0xC0+n; break; }
+                                        if (abs(pt.y-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bHoverPin=iCurPin+n; break; }
                                     }
                                 }
                                 if (bLastSizeSide) {
@@ -689,7 +802,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                         [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
                                         [rsTop]  = IDC_SIZENS, [rsBottom] = IDC_SIZENS,
                                         [rsTop|rsLeft]    = IDC_SIZENWSE, [rsTop|rsRight]    = IDC_SIZENESW,
-                                        [rsBottom|rsLeft] = IDC_SIZENESW, [rsBottom|rsRight] = IDC_SIZENWSE };
+                                        [rsBottom|rsLeft] = IDC_SIZENESW, [rsBottom|rsRight] = IDC_SIZENWSE
+                                    };
                                     pbCurCursor = pbSideToCursor[bLastSizeSide];
                                 }
                             }
@@ -707,7 +821,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             char bMoved = 0;
             int iNewX,iNewY;
 
-            if (bLastPin != bPrevPin) { bPrevPin = bLastPin; SetUpdate(); }
+            if (bHoverPin != bPrevPin) { bPrevPin = bHoverPin; SetUpdate(); }
 
             //if resizing, check sides and adjust new size
             if (bResizing) {
@@ -881,23 +995,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         case DIM_SELECT: {         //lParam = DiagramFileStruct*
             LRESULT lRes = (LRESULT)pDiagram;
-            SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
-            WriteBackObject();
-            pDiagram = (DiagramFileStruct*)lParam;
-            //update current diagram state from the new file structure
-            _with( *pDiagram ) {
-                ptOrder = w->pObjects;
-                iObjCount = w->iObjectCount; iObjMaxCount = w->iObjectMaxCount;
-                //restore from cached (when it makes sense)
-                iSelectedIndex = w->iSelectedIdx;
-                iMaxXIdx = iMaxYIdx = -1;
-                iStartIdx = 0 ; iEndIdx = -1;
-                iViewX = w->iViewX; iViewY = w->iViewY;
-                ScrollUpdate( hwnd , -1 , -1 );
-                tInfo.nPos = iViewX ; SetScrollInfo( hwnd , SB_HORZ , &tInfo , TRUE );
-                tInfo.nPos = iViewY ; SetScrollInfo( hwnd , SB_VERT , &tInfo , TRUE );
-                SetUpdate();
-            } _endwith
+            WriteBackDiagram();
+            RetrieveDiagram( (DiagramFileStruct*)lParam );
             return lRes;
             break;
         }
@@ -906,7 +1005,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             break;
         }
         case DIM_GENERATE: {       //wParam = FileCount // lParam = DiagramFileStruct**
-            WriteBackObject();
+            WriteBackDiagram();
             GenerateFullCode( (int)wParam , (DiagramFileStruct**)lParam );
             break;
         }
@@ -1001,7 +1100,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         case WM_LBUTTONDOWN: {     //Button pressed
             SetFocus(hwnd);
-            int iOldSel = iSelectedIndex ; iSelectedIndex = -1;
+            int iOldSel = iSelectedIndex ; iSelectedIndex = -1; bConnectingPin = 0;
             static uint32_t iPrevTime=0;
             uint32_t iElapsed = GetMessageTime(); //printf("%i\n",iElapsed);
             iElapsed -= iPrevTime; iPrevTime = GetMessageTime();
@@ -1027,16 +1126,24 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
             if (iOldSel != iSelectedIndex) { SetUpdate(); }
 
+            //for connection creation dragging
+            if (bHoverPin) {
+                StartConnectingPin( bHoverPin );
+                SetCapture( hwnd );
+                return 0;
+            }
+
             //start of the dragging position
             if (iSelectedIndex >= 0) {
                 iDragStartX = (short)LOWORD(lParam)  ; iDragStartY = (short)HIWORD(lParam);
                 bDragging = 1; SetCapture( hwnd );
             }
 
+
             return 0;
         }
         case WM_LBUTTONUP: {       //Button released
-            if (bDragging || bResizing) { SetCapture( NULL ); }
+            if (bDragging || bResizing || bConnectingPin ) { SetCapture( NULL ); }
             if (bDragging>1 || bResizing) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
             bDragging = 0; bResizing = 0; return 0;
         }
