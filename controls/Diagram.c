@@ -1,6 +1,5 @@
 #include <windows.h>
-//#include <winscard.h>
-
+#include <winscard.h>
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
@@ -88,8 +87,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iBufWid,iBufHei;
     static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;
     _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;
+    _const cConnectingBad=0xAA0000 ; _const cConnectingGood=0x00AA00;
     static HBRUSH hbBack , hbBackGrid , hbObject[256] = {0} ;
-    static HPEN hpSelected;
+    static HPEN hpSelected, hpConnectingBad, hpConnectingGood;
     static char* IDC_CONNECT = MAKEINTRESOURCE(32631);
 
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
@@ -97,23 +97,25 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     #define aObject(_I) (*ptOrder[_I])
     #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]->Content)))
 
-    static int iObjCount=0, iObjMaxCount=0; //object counting / limit
-    static int iFreeSlotCount=0, iObjTotal=0;     //free slots in the ptObjects[] array
-    static int iMaxX=0, iMaxY=0;                  //maximum position of any existing object (pixels)
-    static int iViewX=0, iViewY=0;                //scrolling offset (pixels)
-    static char bUsedIDs[16384/8];                //bitmap of used IDs (1 bit per ID)
-    static int iMaxXIdx=-1 , iMaxYIdx=-1;         //indexes for the objects that have the maximum position (cache)
-    static int iStartIdx=0, iEndIdx=-1;           //start/end indexes for drawn objects (cache)
-    static int iSelectedIndex=-1,iHoverIndex=-1;  //current selected index // hovered index
-    static int iMouseX=0,iMouseY=0;               //last mouse position (pixels)
+    static int iObjCount=0, iObjMaxCount=0;         //object counting / limit
+    static int iFreeSlotCount=0, iObjTotal=0;       //free slots in the ptObjects[] array
+    static int iMaxX=0, iMaxY=0;                    //maximum position of any existing object (pixels)
+    static int iViewX=0, iViewY=0;                  //scrolling offset (pixels)
+    static char bUsedIDs[16384/8];                  //bitmap of used IDs (1 bit per ID)
+    static int iMaxXIdx=-1 , iMaxYIdx=-1;           //indexes for the objects that have the maximum position (cache)
+    static int iStartIdx=0, iEndIdx=-1;             //start/end indexes for drawn objects (cache)
+    static int iSelectedIndex=-1,iHoverIndex=-1;    //current selected index // hovered index
+    static int iMouseX=0,iMouseY=0;                 //last mouse position (pixels)
     static int iFontSize=0;
-    static int iDragStartX,iDragStartY;           //position where drag started (if dragging) (pixels)
-    static int iDragCancelX,iDragCancelY;         //original position of dragged element (if dragging) (pixels)
-    static char bDragging=0, *pbCurCursor = NULL; //0=no drag, 1=drag may start, 2=dragging // current cursor
-    static RECT tResizeCancelRc;                  //original rectangle of the resized object
-    static char bResizing=0, bLastSizeSide=0;     //0=no resize, n=resize side // current cursor
-    static char bHoverPin=0, bPrevPin=0;          //last/previous pin state (for pin highlighting)
-    static char bConnectingPin=0, bPinType=0;     //selected pin number/type when adding a connection
+    static int iDragStartX,iDragStartY;              //position where drag started (if dragging) (pixels)
+    static int iDragCancelX,iDragCancelY;            //original position of dragged element (if dragging) (pixels)
+    static char bDragging=0, *pbCurCursor = NULL;    //0=no drag, 1=drag may start, 2=dragging // current cursor
+    static RECT tResizeCancelRc;                     //original rectangle of the resized object
+    static char bResizing=0, bLastSizeSide=0;        //0=no resize, n=resize side // current cursor
+    static char bHoverPin=0, bPrevPin=0;             //last/previous pin state (for pin highlighting)
+    static char bConnectingPin=0;                    //selected pin number when adding a connection
+    static char bConnectingPinType=0;                //selected pin type when adding a connection
+    static void* pbConnectingCursor = NULL;
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
@@ -177,19 +179,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     // ------------- Diagram functions -------------
-
     int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
         //if the cached index is correct then great return it and the pin number!
+        //printf("cached index=%i uID=%i pin=%i\n",tConnect->uIndexHint,tConnect->uUniqueID,tConnect->uTargetPin);
         _with( aObject(tConnect->uIndexHint) ) {
+            //printf("obj uID=%i\n",w->uUniqueID);
             if ( w->uUniqueID == tConnect->uUniqueID ) {
                 *piPinNum = tConnect->uTargetPin;
+                //puts("found cached");
                 return tConnect->uIndexHint;
             }
         } _endwith;
         //otherwise we search all elements to find its new position
+        //puts("searching all");
         for (int i=0 ; i<iObjCount; i++ ) {
             _with( aObject(i) ) {
-                if ( w->uUniqueID = tConnect->uUniqueID ) {
+                if ( w->uUniqueID == tConnect->uUniqueID ) {
                     tConnect->uIndexHint = i;
                     *piPinNum = tConnect->uTargetPin;
                     return i;
@@ -200,22 +205,59 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (piPinNum) { *piPinNum = 0; }
         return -1;
     }
+    int PinPositionFromObject( int iIndex, char bPinID , int* piX , int* piY ) {
+        if (iIndex < 0 || iIndex >= iObjCount) { return 0; }
+        if (bPinID < 1) { return 0; }
+        _with( aObject(iIndex) ) {
+            int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
+            if ( bPinID <= iPinCnt) { //input pin
+                if (!piX) { return pinInput; }
+                *piX = _Grid2Pix(w->iX)-iViewX+(_Grid2Pix(w->iW)*(bPinID))/(iPinCnt+1);
+                *piY = _Grid2Pix(w->iY)-iViewY-(iFontSize*2)/5;
+                return pinInput;
+            }
+            bPinID -= iPinCnt; iPinCnt = g_ClassInterface[w->iClassID].bOutPins;
+            if ( bPinID <= iPinCnt) { //output pin
+                if (!piX) { return pinOutput; }
+                *piX = _Grid2Pix(w->iX)-iViewX+(_Grid2Pix(w->iW)*(bPinID))/(iPinCnt+1);
+                *piY = _Grid2Pix(w->iY+w->iH)-iViewY+(iFontSize*2)/5;
+                return pinOutput;
+            }
+            bPinID -= iPinCnt; iPinCnt = g_ClassInterface[w->iClassID].bExecPins;
+            if ( bPinID <= iPinCnt) { //exec pin
+                if (!piX) { return pinExec; }
+                *piX = _Grid2Pix(w->iX+w->iW)-iViewX;
+                *piY = _Grid2Pix(w->iY)-iViewY+(iFontSize/4)+(_Grid2Pix(w->iH)*(bPinID))/(iPinCnt+1);
+                return pinExec;
+            }
+        } _endwith;
+        return 0;
+    }
+
     void StartConnectingPin( int iPin ) { //Initiate the drag to connect objects
         bConnectingPin = iPin;
         printf("Selected pin %i\n",iPin);
         _with(aObject(iSelectedIndex)) {
             int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
-            if (iPin <= iPinCnt) { bPinType = pinInput; puts("Input Pin"); return; }
+            if (iPin <= iPinCnt) { bConnectingPinType = pinInput; puts("Input Pin"); return; }
             iPinCnt += g_ClassInterface[w->iClassID].bOutPins;
-            if (iPin <= iPinCnt) { bPinType = pinOutput; puts("Output Pin"); return; }
+            if (iPin <= iPinCnt) { bConnectingPinType = pinOutput; puts("Output Pin"); return; }
             iPinCnt += g_ClassInterface[w->iClassID].bExecPins;
-            if (iPin <= iPinCnt) { bPinType = pinExec; puts("Exec Pin"); return; }
+            if (iPin <= iPinCnt) { bConnectingPinType = pinExec; puts("Exec Pin"); return; }
         } _endwith;
     }
-    void ActConnectingPin( int iObject, int iPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
-        if (!iPin) { if (bAddPin) { puts("Canceled connecting pin"); } return; }
-        printf("%s %i.%i to %i.%i\n",bAddPin?"Connecting":"Checking",iSelectedIndex,bConnectingPin,iObject,iPin);
-        if (bAddPin) { bConnectingPin = 0; }
+    int  ActConnectingPin( int iObject, int iPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
+        if (iObject < 0 && (!bAddPin)) { return 0; }
+        if (!iPin) { if (bAddPin) {
+            puts("Canceled connecting pin"); }
+            bConnectingPin = 0; return 0;
+        }
+        if ( ( iObject != iSelectedIndex) || (!bHoverPin) ) { return 0; }
+        _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , 0 , 0 );
+        if (bPinType == bConnectingPinType) { return 0; }
+        if (!bAddPin) { return 1; } //just checking if a connection is possible
+        bConnectingPin = 0;
+        return 1;
     }
 
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -298,23 +340,54 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //skip object if outside horizontal range
                 if ( (iPosX+_Grid2Pix(w->iW)) < 0 || iPosX >= iBufWid ) { continue; }
 
+                //draw dragging connection
+                if (bConnectingPin) {
+                    //bConnectingPin have the PIN, iSelectedIndex have the object, iMouseX/iMouseY have the mouse position
+                    //tracing a path from the selected pin to the mouse position
+                    int iX,iY, iXX, iYY; pbConnectingCursor = IDC_NO;
+                    if (PinPositionFromObject( iSelectedIndex , bConnectingPin , &iX , &iY )) {
+                        iXX = iMouseX; iYY = iMouseY;
+                        _auto hpConnecting = hpConnectingBad; //default to bad connection
+                        if ( ActConnectingPin( iHoverIndex , bHoverPin , 0 ) ) {
+                            _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
+                            hpConnecting = hpConnectingGood; pbConnectingCursor = IDC_CONNECT;
+                        }
+                        _const hOldPen = SelectObject( hdc , hpConnecting );
+                        for (int iN=0; iN<3; iN++) {
+                            const int iOX = (iN & 1), iOY = (iN/2);
+                            const POINT atBezier[] = {
+                                {iOX+iX         , iOY+iY} ,
+                                {iOX+iX         , iOY+iYY} ,
+                                {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
+                                {iOX+iXX        , iOY+iYY}
+                            };
+                            PolyBezier( hdc , atBezier , 4 );
+                        }
+                        SelectObject( hdc , hOldPen );
+                    }
+                }
+
+                #if 0
                 //draw connections
                 if (w->tConnector.uConnector) { //there's connections???
-                    puts("CONNECTIONS");
                     ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1;
                     if (!w->tConnector.uTargetPin) { //it's a list instead of a single connection
                         ptList = NULL; iConCnt = 0; //todo setup storage for connector lists
                     }
+                    //printf("Connections = %i\n",iConCnt);
 
                     for (int iCon=0 ; iCon < iConCnt ; iCon++) {
-                        int iConPin = 0;
-                        int iConIdx = IndexAndPinFromConnector( ptList+iCon , &iConPin );
+                        int iConPin = 0, iConIdx = IndexAndPinFromConnector( ptList+iCon , &iConPin );
                         if (iConIdx < 0) { puts("Internal error drawing connector"); continue; }
+                        //printf("Connection #%i: Index = %i, Pin = %i\n",iCon,iConIdx,iConPin);
                         int iXX, iYY, bInPins;
                         const int iX=iPosX+_Grid2Pix(w->iW)/2, iY = iPosY+_Grid2Pix(w->iH)+iFontHeight/2;
                         _with( aObject(iConIdx) ) {
-                            iXX = _Grid2Pix(w->iX)-iViewX+_Grid2Pix(w->iW)/2; iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
                             bInPins = g_ClassInterface[w->iClassID].bInPins;
+                            iXX = _Grid2Pix(w->iX)-iViewX+(iFontWidth/4)+
+                                (_Grid2Pix(w->iW)*iConPin)/(bInPins+1);
+                            iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
+
                         } _endwith;
                         if (bInPins) {
                             for (int iN=0; iN<3; iN++) {
@@ -330,6 +403,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         }
                     }
                 }
+                #endif
 
                 //render object
                 SelectObject( hdc , hbObject[ w->iClassID ] );
@@ -399,10 +473,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }; //void DrawWindow(void)
 
     int ObtainUniqueID() {
-        static int iLastID;
+        static int iLastID = 0;
         for (int i=0; i<16384; i++) {
             int iID = (iLastID + i) % 16384;
-            if (iID &&!(bUsedIDs[iID/8] & (1<<(iID%8)))) {
+            //prevent iID of 0 (reserved) and check if it's already used
+            if (iID && !(bUsedIDs[iID/8] & (1<<(iID%8)))) {
+                printf("new ID: %i\n",iID);
                 bUsedIDs[iID/8] |= (1<<(iID%8)); return iLastID=iID;
             }
         }
@@ -653,8 +729,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
                 w->iY = iPosY       ; w->iH = 48/_GridSize;
                 w->iClassID = idClsString;
-                w->tConnector.uConnector = 0;
                 w->uUniqueID = ObtainUniqueID();
+                w->tConnector.uConnector = 0;
+                //w->tConnector.uIndexHint = 1; w->tConnector.uUniqueID = 2; w->tConnector.uTargetPin = 1;
                 strncpy( w->zName , "MyString" , _countof(w->zName) );
                 iPosY += w->iH+24/_GridSize;
             } _endwith;
@@ -755,6 +832,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //if not check if hovering over a visible object
             const POINT pt = { iMouseX , iMouseY }; RECT tRc;
             int iIndex = iHoverIndex = ObjectFromPoint( pt , &tRc );
+            if (iIndex < 0 && bConnectingPin) { SetCursor( LoadCursor( NULL , IDC_CONNECT ) ); return 0; }
             if (iIndex >= 0) {
                 _with( aObject(iIndex) ) {
                     const RECT tRc = {
@@ -796,7 +874,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                         if (abs(pt.y-i) < (iFontSize/2)) { pbCurCursor = IDC_CONNECT; bLastSizeSide = 0; bHoverPin=iCurPin+n; break; }
                                     }
                                 }
-                                if (bLastSizeSide) {
+                                //if connecting a pin can't have sizing cursors
+                                //but the cursor for that can vary if the pin connected or not;
+                                if (bLastSizeSide ) {
                                     //otherwise set the cursor to "resize"
                                     static char* const pbSideToCursor[] = {
                                         [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
@@ -808,6 +888,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 }
                             }
                         }
+                        if (bConnectingPin) { pbCurCursor = pbConnectingCursor; }
                         if (pbCurCursor) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
                     }
                 } _endwith;
@@ -821,7 +902,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             char bMoved = 0;
             int iNewX,iNewY;
 
-            if (bHoverPin != bPrevPin) { bPrevPin = bHoverPin; SetUpdate(); }
+            if (bConnectingPin) {
+                Diagram_WndProc( hwnd , WM_SETCURSOR , HTCLIENT, lParam );
+                SetUpdate();
+            }
+            if (bHoverPin != bPrevPin) { printf("idx=%i pin=%i\n",iHoverIndex,bHoverPin);bPrevPin = bHoverPin; SetUpdate(); }
 
             //if resizing, check sides and adjust new size
             if (bResizing) {
@@ -1040,6 +1125,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             hbBack = CreateSolidBrush( cBack );
             hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
             hpSelected = CreatePen( PS_SOLID , 3 , cSelected );
+            hpConnectingBad  = CreatePen( PS_DOT , 0 , cConnectingBad );
+            hpConnectingGood = CreatePen( PS_DOT , 0 , cConnectingGood );
             PostMessage( hwnd , WM_HSCROLL , 0,0 );
             PostMessage( hwnd , WM_VSCROLL , 0,0 );
             return 1;
@@ -1129,7 +1216,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             //for connection creation dragging
             if (bHoverPin) {
                 StartConnectingPin( bHoverPin );
-                SetCapture( hwnd );
+                //SetCapture( hwnd );
                 return 0;
             }
 
@@ -1145,7 +1232,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_LBUTTONUP: {       //Button released
             if (bDragging || bResizing || bConnectingPin ) { SetCapture( NULL ); }
             if (bDragging>1 || bResizing) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
-            bDragging = 0; bResizing = 0; return 0;
+            if ( bConnectingPin ) { ActConnectingPin( iHoverIndex , bHoverPin , 1 ); }
+            bDragging = 0; bResizing = 0;
+            SetUpdate(); return 0;
         }
         case WM_KILLFOCUS:         //Lost Focus
         case WM_SETFOCUS: {        //Got Focus
