@@ -24,7 +24,7 @@ const static char* g_pzAppName = "Orca IDE: ";
 const static char* g_BinaryGCC[] = {
     "g:\\_OldMingw\\mingw-w64-10.0.0\\bin\\gcc.exe",
     "gcc.exe",
-    "%gcc%",
+    "%gcc%"
 };
 
 UINT g_CurItemID=0 , g_CurItemState=0;
@@ -85,13 +85,18 @@ static int ProjectBuild() {
     //buffers that auto clean at end
     char *pzCompiler = NULL, *pzFileIn = NULL , *pzFileExt = NULL;
 
+    puts("------------------------------");
+
     //searching for toolchain
+    int iLast = -1;
     for (i=_countof(g_BinaryGCC)-1 ; i>=0 ; i--) {
+        if (iLast != i) { printf("Trying #%i: '%s' = ",i,g_BinaryGCC[i]); iLast=i; }
         iGccLen = ExpandEnvironmentStrings( g_BinaryGCC[i] , pzCompiler , iMaxSz );
         if (iGccLen > iMaxSz) { iMaxSz=iGccLen+128 ; pzCompiler = realloc(pzCompiler , iMaxSz) ; i++ ; continue; }
+        printf("'%s'\n",pzCompiler);
         if (GetFileAttributes( pzCompiler ) != 0xFFFFFFFF) { break; }
     }
-    if (i<0) { goto _Cleanup; }
+    if (i<0) { puts("Compiler not found"); goto _Cleanup; }
 
     //toolchain found
     ConsolePrintf("compiler = '%s'\n" , pzCompiler );

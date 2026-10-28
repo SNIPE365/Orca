@@ -28,7 +28,7 @@ static ClassGroupStruct g_atClassGroup[] = {
 
 //////////////////////////////// Per Class Information ///////////////////////////////////
 typedef struct {
-    LRESULT (*pfHandlerProc)( void* pObject , UINT message , WPARAM wParam , LPARAM lParam );
+    LRESULT (*pfHandlerProc)( _ClassPrototype );
     char*    pzName;
     uint8_t  bGroup;
     uint8_t  bInPins, bOutPins, bExecPins;

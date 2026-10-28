@@ -14,9 +14,16 @@ typedef struct {
     union {
         uint32_t uConnector;
         struct {
-            uint32_t uIndexHint:14; //max 16383 objects per file
-            uint32_t uUniqueID :14;
-            uint32_t uTargetPin: 4;
+            uint32_t uIndexHint   :12; //max 5096 objects per file
+            uint32_t uUniqueID    :12;
+            uint32_t uSourcePin   : 4;
+            uint32_t uTargetPin   : 4; //non zero
+        };
+        struct {
+            uint32_t uListID      :12; //ID of a list of connectors
+            uint32_t uListSize    :12; //how many connectors are in the list
+            uint32_t uReserved   : 4;
+            uint32_t uOneConnector: 4; //zero
         };
     };
 } ConnectorStruct;
@@ -29,7 +36,9 @@ typedef struct {
     int16_t  iX;                //+ 2= 8 // X position of the object (in grid units)
     uint8_t  iW,iH;             //+ 2= 10 // Width and height of the object (grid units)
     uint8_t  bFlags, bResv;     //+ 2= 12 // Flags and reserved byte of the object
-    ConnectorStruct tConnector; //+ 4= 16 // Connectors (if .uTargetPin is 0, but .uConnector is not 0) then .uIndexHint points to a list of connectors
+    ConnectorStruct tConnector; //+ 4= 16 // Connectors (if .uTargetPin is 0, but .uConnector is not 0)
+    //                                       then .uIndexHint points to a list of connectors and
+    //                                       .uUniqueID is how many connectors are there
     char zName[19], zZero;      //+20= 32 // Name (user) of the object and zero terminator
     char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
@@ -87,7 +96,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iBufWid,iBufHei;
     static char bDrawn=1,bUpdateScroll=0,bHScroll=0,bVScroll=0;
     _const cBack=0xFFFFFF ; _const cGrid=0xEEEEEE ; _const cSelected=0x101010;
-    _const cConnectingBad=0xAA0000 ; _const cConnectingGood=0x00AA00;
+    _const cConnectingBad=0x0000AA ; _const cConnectingGood=0x00AA00;
     static HBRUSH hbBack , hbBackGrid , hbObject[256] = {0} ;
     static HPEN hpSelected, hpConnectingBad, hpConnectingGood;
     static char* IDC_CONNECT = MAKEINTRESOURCE(32631);
@@ -118,6 +127,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static void* pbConnectingCursor = NULL;
     static DiagramFileStruct* pDiagram = NULL;
     static DiagramObjectStruct** ptOrder = NULL;
+    static ConnectorStruct **g_pListConnectors = NULL;                     //array of lists for connectors
+    static int g_iListConnectorsCount = 0, g_iListConnectorsMaxCount = 0;  //count max size of those lists
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
     static void* hwndOrgProc = NULL;
     static int iClassToAdd = -1;
@@ -178,6 +189,23 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         #undef emitf
     }
 
+    int ListConnectorsNew() {
+        if (!g_pListConnectors) { g_iListConnectorsCount=1; }
+        if (g_iListConnectorsCount >= g_iListConnectorsMaxCount) {
+            g_iListConnectorsMaxCount += 8;
+            g_pListConnectors = realloc( g_pListConnectors , sizeof(ConnectorStruct) * g_iListConnectorsMaxCount );
+            for (int i=g_iListConnectorsMaxCount-8 ; i<g_iListConnectorsMaxCount ; i++ ) {
+                g_pListConnectors[i]=0;
+            }
+        }
+        g_iListConnectorsCount++;
+        for (int i=1 ; i<g_iListConnectorsMaxCount ; i++ ) {
+            if (!g_pListConnectors[i]) { return i; }
+        }
+        printf("It should never reach this point!!! at line %i\n",__LINE__);
+        return 0;
+    }
+
     // ------------- Diagram functions -------------
     int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
         //if the cached index is correct then great return it and the pin number!
@@ -233,31 +261,79 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         } _endwith;
         return 0;
     }
-
-    void StartConnectingPin( int iPin ) { //Initiate the drag to connect objects
-        bConnectingPin = iPin;
-        printf("Selected pin %i\n",iPin);
-        _with(aObject(iSelectedIndex)) {
+    // source object and source pin to start connection
+    void StartConnectingPin( int iSrcObject, int iSrcPin ) { //Initiate the drag to connect objects
+        if (iSrcObject < 0 || iSrcObject >= iObjCount) { return; }
+        if (!iSrcPin) { return; }
+        iSelectedIndex = iSrcObject; bConnectingPin = iSrcPin;
+        printf("Selected pin %i\n",iSrcPin);
+        _with(aObject(iSrcObject)) {
             int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
-            if (iPin <= iPinCnt) { bConnectingPinType = pinInput; puts("Input Pin"); return; }
+            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinInput; puts("Input Pin"); return; }
             iPinCnt += g_ClassInterface[w->iClassID].bOutPins;
-            if (iPin <= iPinCnt) { bConnectingPinType = pinOutput; puts("Output Pin"); return; }
+            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinOutput; puts("Output Pin"); return; }
             iPinCnt += g_ClassInterface[w->iClassID].bExecPins;
-            if (iPin <= iPinCnt) { bConnectingPinType = pinExec; puts("Exec Pin"); return; }
+            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinExec; puts("Exec Pin"); return; }
         } _endwith;
     }
-    int  ActConnectingPin( int iObject, int iPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
-        if (iObject < 0 && (!bAddPin)) { return 0; }
-        if (!iPin) { if (bAddPin) {
-            puts("Canceled connecting pin"); }
-            bConnectingPin = 0; return 0;
-        }
-        if ( ( iObject != iSelectedIndex) || (!bHoverPin) ) { return 0; }
-        _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , 0 , 0 );
-        if (bPinType == bConnectingPinType) { return 0; }
+    // target object and target pin to check or add connection
+    #define CancelConnectingPin() ActConnectingPin( -1 , 0 , 1 )
+    #define CheckConnectingPin( _Obj , _Pin ) ActConnectingPin( _Obj , _Pin , 0 )
+    #define AddConnectingPin( _Obj , _Pin ) ActConnectingPin( _Obj , _Pin , 1 )
+    int  ActConnectingPin( int iTgtObject, int iTgtPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
+        #define _CancelConnection() { if (bAddPin) { puts("Cancelled connecting pin"); bConnectingPin = 0; }; return 0; }
+        //printf("Obj=%i Pin=%i Add=%i\n",iObject,iPin,bAddPin);
+        //cancels the connection when iTgtPin is 0, while adding pin.
+        if (!iTgtPin && bAddPin) {  _CancelConnection(); }
+
+        //invalid/null object, or pin... make checks to fail (connecting to self is also invalid)
+        _const iSrcObject = iSelectedIndex; _const iSrcPin = bConnectingPin; _const bSrcPinType = bConnectingPinType;
+        if ((iTgtObject<0 || !iTgtPin) || ( iTgtObject==iSrcObject)) { _CancelConnection(); }
+        _const bTgtPinType = PinPositionFromObject( iTgtObject , iTgtPin , 0 , 0 );
+        if (bTgtPinType == bSrcPinType) { _CancelConnection(); }
         if (!bAddPin) { return 1; } //just checking if a connection is possible
-        bConnectingPin = 0;
-        return 1;
+
+        //add the connection to the object...
+        //should we add to both objects for cross check?
+        //making the user responsible for proper source->target direction is bad i guess
+        //so if we don't add to both, we need to add an "input pin" to an "output pin"
+        //meaning source/target objects can be swapped? exec pins are callback to function not to pins?
+
+        //printf("Adding connection from %i.%i to %i.%i\n", iSrcObject, iSrcPin, iTgtObject, iTgtPin);
+        _with( aObject(iTgtObject) ) {
+            ConnectorStruct* pCon = &w->tConnector; int iConnCnt = 0;
+            if (pCon->uConnector) {
+                iConnCnt = 1;  //if connector is not empty then there's 1 element
+                if (!pCon->uOneConnector) { //but then... if uOneConnector is 0 there's more than 1 element
+                    iConnCnt = pCon->uListSize; pCon = g_pListConnectors[pCon->uListID];
+                }
+            }
+
+            //TODO: check if EXACT the connection already exists, if so then cancel it
+            //because it's possible to emit the same string twice but they should use separate path's
+
+            //printf("Connectors: %i\n", iConnCnt);
+
+            if (iConnCnt == 1) { //if there was 1 element then create a list
+                int iNewListID = ListConnectorsNew();
+                g_pListConnectors[iNewListID]=pCon=malloc( sizeof(ConnectorStruct)*2 ); //allocate a connector
+                pCon[0].uConnector = w->tConnector.uConnector; //copy the existing connector to the new list
+                w->tConnector.uListID = iNewListID; w->tConnector.uListSize = 2; w->tConnector.uOneConnector = 0;
+                //printf("New List = (%i)%p",iNewListID,pCon);
+            }            //now add the new connector to the list (resizing the list if at least 1 connector was there)
+            if (iConnCnt > 1) {
+                pCon=realloc( pCon , sizeof(ConnectorStruct)*(iConnCnt+1) );
+                g_pListConnectors[w->tConnector.uListID]=pCon;
+                w->tConnector.uListSize++;
+            }
+            pCon[iConnCnt].uUniqueID = aObject(iSrcObject).uUniqueID;
+            pCon[iConnCnt].uIndexHint = iSrcObject;
+            pCon[iConnCnt].uSourcePin = iTgtPin;
+            pCon[iConnCnt].uTargetPin = iSrcPin; //this also sets .uOneConnector
+        } _endwith
+
+        bConnectingPin = 0; return 1;
+        #undef _CancelConnection
     }
 
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -340,56 +416,23 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //skip object if outside horizontal range
                 if ( (iPosX+_Grid2Pix(w->iW)) < 0 || iPosX >= iBufWid ) { continue; }
 
-                //draw dragging connection
-                if (bConnectingPin) {
-                    //bConnectingPin have the PIN, iSelectedIndex have the object, iMouseX/iMouseY have the mouse position
-                    //tracing a path from the selected pin to the mouse position
-                    int iX,iY, iXX, iYY; pbConnectingCursor = IDC_NO;
-                    if (PinPositionFromObject( iSelectedIndex , bConnectingPin , &iX , &iY )) {
-                        iXX = iMouseX; iYY = iMouseY;
-                        _auto hpConnecting = hpConnectingBad; //default to bad connection
-                        if ( ActConnectingPin( iHoverIndex , bHoverPin , 0 ) ) {
-                            _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
-                            hpConnecting = hpConnectingGood; pbConnectingCursor = IDC_CONNECT;
-                        }
-                        _const hOldPen = SelectObject( hdc , hpConnecting );
-                        for (int iN=0; iN<3; iN++) {
-                            const int iOX = (iN & 1), iOY = (iN/2);
-                            const POINT atBezier[] = {
-                                {iOX+iX         , iOY+iY} ,
-                                {iOX+iX         , iOY+iYY} ,
-                                {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
-                                {iOX+iXX        , iOY+iYY}
-                            };
-                            PolyBezier( hdc , atBezier , 4 );
-                        }
-                        SelectObject( hdc , hOldPen );
-                    }
-                }
-
-                #if 0
                 //draw connections
                 if (w->tConnector.uConnector) { //there's connections???
-                    ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1;
-                    if (!w->tConnector.uTargetPin) { //it's a list instead of a single connection
-                        ptList = NULL; iConCnt = 0; //todo setup storage for connector lists
+                    ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1, iList=-1;
+                    if (!w->tConnector.uOneConnector) { //it's a list instead of a single connection
+                        iList = w->tConnector.uListID;
+                        ptList = g_pListConnectors[iList]; iConCnt = w->tConnector.uListSize;
+
                     }
-                    //printf("Connections = %i\n",iConCnt);
-
+                    //printf("Index: %i , Connections = %i List=(%i)%p\n",iIndex,iConCnt,iList,ptList);
                     for (int iCon=0 ; iCon < iConCnt ; iCon++) {
-                        int iConPin = 0, iConIdx = IndexAndPinFromConnector( ptList+iCon , &iConPin );
-                        if (iConIdx < 0) { puts("Internal error drawing connector"); continue; }
-                        //printf("Connection #%i: Index = %i, Pin = %i\n",iCon,iConIdx,iConPin);
-                        int iXX, iYY, bInPins;
-                        const int iX=iPosX+_Grid2Pix(w->iW)/2, iY = iPosY+_Grid2Pix(w->iH)+iFontHeight/2;
-                        _with( aObject(iConIdx) ) {
-                            bInPins = g_ClassInterface[w->iClassID].bInPins;
-                            iXX = _Grid2Pix(w->iX)-iViewX+(iFontWidth/4)+
-                                (_Grid2Pix(w->iW)*iConPin)/(bInPins+1);
-                            iYY = _Grid2Pix(w->iY)-iViewY-(iFontHeight*2)/5;
-
-                        } _endwith;
-                        if (bInPins) {
+                        _with (ptList[iCon]) {
+                            int iTgtPin = 0, iTgtIdx = IndexAndPinFromConnector( ptList+iCon , &iTgtPin );
+                            if (iTgtIdx < 0) { puts("Internal error drawing connector"); continue; }
+                            //printf("Connection #%i: Index = %i, Pin = %i\n",iCon,iTgtIdx,iTgtPin);
+                            int iX,iY,iXX,iYY;
+                            PinPositionFromObject( iIndex  , w->uSourcePin , &iXX , &iYY );
+                            PinPositionFromObject( iTgtIdx , iTgtPin , &iX , &iY );
                             for (int iN=0; iN<3; iN++) {
                                 const int iOX = (iN & 1), iOY = (iN/2);
                                 const POINT atBezier[] = {
@@ -400,10 +443,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 };
                                 PolyBezier( hdc , atBezier , 4 );
                             }
-                        }
+                        } _endwith;
                     }
                 }
-                #endif
 
                 //render object
                 SelectObject( hdc , hbObject[ w->iClassID ] );
@@ -464,7 +506,38 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
 
         iEndIdx=(iIndex < iObjCount ? iIndex-1 : iObjCount-1);
+
+        //draw dragging connection if any
+        if (bConnectingPin) {
+            //bConnectingPin have the PIN, iSelectedIndex have the object, iMouseX/iMouseY have the mouse position
+            //tracing a path from the selected pin to the mouse position
+            int iX,iY, iXX, iYY; pbConnectingCursor = IDC_NO;
+            if (PinPositionFromObject( iSelectedIndex , bConnectingPin , &iX , &iY )) {
+                iXX = iMouseX; iYY = iMouseY;
+                _auto hpConnecting = hpConnectingBad; //default to bad connection
+                if ( CheckConnectingPin( iHoverIndex , bHoverPin ) ) {
+                    _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
+                    hpConnecting = hpConnectingGood; pbConnectingCursor = IDC_CONNECT;
+                }
+                _const hOldPen = SelectObject( hdc , hpConnecting );
+                for (int iN=0; iN<3; iN++) {
+                    const int iOX = (iN & 1), iOY = (iN/2);
+                    const POINT atBezier[] = {
+                        {iOX+iX         , iOY+iY} ,
+                        {iOX+iX         , iOY+iYY} ,
+                        {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
+                        {iOX+iXX        , iOY+iYY}
+                    };
+                    PolyBezier( hdc , atBezier , 4 );
+                }
+                SelectObject( hdc , hOldPen );
+            }
+        }
+
+
         //puts("drawing end");
+        //
+        //
 
         bDrawn = 2;
         if (iViewY == iTempViewY) { bDrawn = 1; if (wParam) { KillTimer(hwnd,wParam); } }
@@ -888,7 +961,18 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 }
                             }
                         }
-                        if (bConnectingPin) { pbCurCursor = pbConnectingCursor; }
+                        //if connecting then the cursor is determined by a delayed check
+                        //but if the hovered object has only one pin then that pin is selected
+                        //TODO: improve this so that if there's more pins then set the first pin based on the side
+                        if (bConnectingPin) {
+                            if ( !bHoverPin ) {
+                                _const iPins = g_ClassInterface[w->iClassID].bInPins +
+                                    g_ClassInterface[w->iClassID].bOutPins + g_ClassInterface[w->iClassID].bExecPins;
+                                if (iPins==1) { bHoverPin = 1; }
+                            }
+                            pbCurCursor = pbConnectingCursor;
+                        }
+
                         if (pbCurCursor) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
                     }
                 } _endwith;
@@ -906,7 +990,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 Diagram_WndProc( hwnd , WM_SETCURSOR , HTCLIENT, lParam );
                 SetUpdate();
             }
-            if (bHoverPin != bPrevPin) { printf("idx=%i pin=%i\n",iHoverIndex,bHoverPin);bPrevPin = bHoverPin; SetUpdate(); }
+            if (bHoverPin != bPrevPin) {
+                //printf("idx=%i pin=%i\n",iHoverIndex,bHoverPin);
+                bPrevPin = bHoverPin; SetUpdate();
+            }
 
             //if resizing, check sides and adjust new size
             if (bResizing) {
@@ -1215,7 +1302,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             //for connection creation dragging
             if (bHoverPin) {
-                StartConnectingPin( bHoverPin );
+                StartConnectingPin( iHoverIndex, bHoverPin );
                 //SetCapture( hwnd );
                 return 0;
             }
@@ -1232,7 +1319,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_LBUTTONUP: {       //Button released
             if (bDragging || bResizing || bConnectingPin ) { SetCapture( NULL ); }
             if (bDragging>1 || bResizing) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
-            if ( bConnectingPin ) { ActConnectingPin( iHoverIndex , bHoverPin , 1 ); }
+            if (bConnectingPin) { AddConnectingPin( iHoverIndex , bHoverPin ); }
             bDragging = 0; bResizing = 0;
             SetUpdate(); return 0;
         }
