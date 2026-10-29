@@ -5,6 +5,7 @@ typedef struct {
 } ClsStdOutStruct;
 
 LRESULT fnClsStdOutHandler( _ClassPrototype ) {
+    DiagramObjectStruct* pObjList = ((DiagramObjectStruct*)pObjectList);
     DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
     _with( *(ClsStdOutStruct*)pObject ) {
         switch (message) {
@@ -25,7 +26,13 @@ LRESULT fnClsStdOutHandler( _ClassPrototype ) {
             case CM_GenerateCode: { //wParam = BufferRemaining // lParam = (char*)Buffer
                 #define emitf(...) iLen += sprintf( pBuffer+iLen , "  " __VA_ARGS__ )
                 char* pBuffer = (char*)lParam; int32_t iBufSz = (int32_t)wParam, iLen=0;
-                emitf( "puts(%s);\r\n" , g_ScratchBuffer );
+                int iN = 0, iPin,iPinType; DiagramObjectStruct *pObj;
+                //printf("Objects: %i\n", objGetConnectedPin( pDiagram , pObjList , -1 , NULL , NULL , NULL ));
+                while (objGetConnectedPin( pDiagram , pObjList , iN++ , &pObj , &iPin , &iPinType ) >= 0 ) {
+                    _with( *pObj ) {
+                        emitf( "puts(%s);\r\n" , pObj->zName );
+                    } _endwith;
+                }
                 return iLen;
                 #undef emitf
             }

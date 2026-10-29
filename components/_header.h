@@ -24,7 +24,7 @@ static ClassGroupStruct g_atClassGroup[] = {
 };
 #undef _DeclAsArray
 
-#define _ClassPrototype void* pObject , UINT message , WPARAM wParam , LPARAM lParam
+#define _ClassPrototype void* pObject , void* pObjectList , UINT message , WPARAM wParam , LPARAM lParam
 
 //////////////////////////////// Per Class Information ///////////////////////////////////
 typedef struct {

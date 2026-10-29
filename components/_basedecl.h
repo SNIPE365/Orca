@@ -15,6 +15,36 @@ void* objReallocContent( void** pObject , uint32_t iLength ) {
     return ((*pObj)->Content);
 }
 
+// enumerate connectors assigned to an object
+int objGetConnectedPin( void* pObject , void* pObjectList , int iQueryIndex , DiagramObjectStruct **pSrcObject , int *piPin , int*piPinType ) {
+    _const pObj = (DiagramObjectStruct*)pObject;
+    _const pList = (DiagramObjectStruct*)pObjectList;
+    int iConnCount = 0;
+    _with( *pObj ) {
+        _auto pCon = &w->tConnector;
+        if (w->tConnector.uConnector) { //if connector is not empty then there's 1 element
+            iConnCount = 1;
+            if (!w->tConnector.uOneConnector) {
+                pCon = g_pListConnectors[w->tConnector.uListID];
+                iConnCount = w->tConnector.uListSize;
+            }
+        }
+        //printf("Connectors: %i\n", iConnCount);
+        if (iQueryIndex < 0) { return iConnCount; }
+        if (iQueryIndex >= iConnCount) { return -1; }
+
+        _auto pConn = &pCon[iQueryIndex];
+        int iPin, iSrcIdx = IndexAndPinFromConnector( pConn , &iPin );
+        if (iSrcIdx < 0) { return -1; }
+        _with( aObject(iSrcIdx) ) {
+            if (pSrcObject) { *pSrcObject = w; }
+            if (piPin) { *piPin = iPin; }
+            if (piPinType) { *piPinType = g_ClassInterface[w->iClassID].bOutPins; }
+        } _endwith
+    } _endwith
+    return iConnCount;
+}
+
 // emit a safe string to the buffer, escaping any quotes or backslashes
 int32_t EmitSafeString( char* pBuffer , int32_t iBufSz , const char* zContent , int32_t iLength ) {
     int32_t iStart = 0, iLen = 0;
@@ -55,7 +85,7 @@ void initComponents() {
 
     // initialize object type info handlers (can't declare statically because they are nested functions)
     #define _SetHandler( _xGroupx , _Class , _xNamex , _xColorx , _xInPinsx , _xOutPinsx , _xExecPinsx , _xTemplatex , _xFlagsx ) \
-        (g_ClassInterface[ iIdx++ ].pfHandlerProc = fn##_Class##Handler)( NULL , CM_GetInfo , 0,0 );
+        (g_ClassInterface[ iIdx++ ].pfHandlerProc = fn##_Class##Handler)( NULL , NULL , CM_GetInfo , 0,0 );
     // set handler and call CM_GetInfo to initialize
     int iIdx=0;
     _ForEachBuiltinClassID( _SetHandler );

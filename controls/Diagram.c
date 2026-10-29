@@ -42,7 +42,6 @@ typedef struct {
     char zName[19], zZero;      //+20= 32 // Name (user) of the object and zero terminator
     char Content[0];            //       // type specific data follows...
 } DiagramObjectStruct;
-
 typedef struct {
     char zName[31], zZero;
     int iObjectCount;
@@ -67,7 +66,48 @@ typedef enum { //Diagram custom messages
     /* PRIVATE ONES */
     DIM_CREATE_BUFFER,
 } DiagramEnum;
+typedef enum { //pin type
+    pinNone    = 0,
+    pinInput   = 1,
+    pinOutput  = 2,
+    pinExec    = 3,
+    pinReserve = 4,
+} PinType;
 
+static DiagramObjectStruct** g_ptOrder = NULL;
+static int g_iObjCount=0, g_iObjMaxCount=0;         //object counting / limit
+#define aObject(_I) (*g_ptOrder[_I])
+#define aObject_Content(_I,_T) (*((_T*)(g_ptOrder[_I]->Content)))
+
+// retrieve the index and pin number from a connector structure, using a cached index if available
+int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
+    //if the cached index is correct then great return it and the pin number!
+    //printf("cached index=%i uID=%i pin=%i\n",tConnect->uIndexHint,tConnect->uUniqueID,tConnect->uTargetPin);
+    _with( aObject(tConnect->uIndexHint) ) {
+        //printf("obj uID=%i\n",w->uUniqueID);
+        if ( w->uUniqueID == tConnect->uUniqueID ) {
+            *piPinNum = tConnect->uTargetPin;
+            //puts("found cached");
+            return tConnect->uIndexHint;
+        }
+    } _endwith;
+    //otherwise we search all elements to find its new position
+    //puts("searching all");
+    for (int i=0 ; i<g_iObjCount; i++ ) {
+        _with( aObject(i) ) {
+            if ( w->uUniqueID == tConnect->uUniqueID ) {
+                tConnect->uIndexHint = i;
+                *piPinNum = tConnect->uTargetPin;
+                return i;
+            }
+        } _endwith;
+    }
+    //and at least, if reaches here then it's not found
+    if (piPinNum) { *piPinNum = 0; }
+    return -1;
+}
+
+// diagram window procedure, handles all messages for the diagram control
 static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wParam, LPARAM lParam ) {
 
     //#define _CTL(_ctlId) g_CTL[_ctlId].hwnd
@@ -82,14 +122,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     typedef enum {
         dmtRedraw = 1,
     } DiagramTimers;
-    typedef enum { //pin type
-        pinNone    = 0,
-        pinInput   = 1,
-        pinOutput  = 2,
-        pinExec    = 3,
-        pinReserve = 4,
-    } PinType;
-
     static HBITMAP hBmBuffer;
     static HFONT hCtlFont,hSmallFont,hSmallFontB,hSymFont;
     static HDC hDcBuffer;
@@ -103,10 +135,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
-    #define aObject(_I) (*ptOrder[_I])
-    #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]->Content)))
 
-    static int iObjCount=0, iObjMaxCount=0;         //object counting / limit
     static int iFreeSlotCount=0, iObjTotal=0;       //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                    //maximum position of any existing object (pixels)
     static int iViewX=0, iViewY=0;                  //scrolling offset (pixels)
@@ -126,7 +155,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bConnectingPinType=0;                //selected pin type when adding a connection
     static void* pbConnectingCursor = NULL;
     static DiagramFileStruct* pDiagram = NULL;
-    static DiagramObjectStruct** ptOrder = NULL;
     static ConnectorStruct **g_pListConnectors = NULL;                     //array of lists for connectors
     static int g_iListConnectorsCount = 0, g_iListConnectorsMaxCount = 0;  //count max size of those lists
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
@@ -154,7 +182,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 _with(*pFile[i]->pObjects[j]) {
                     ConsolePrintf("  Object #%i = '%s'\n", j, w->zName); /*ClassInterfaceStruct*/
                     //tell the class handler to generate code for this object
-                    iLen += g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , CM_GenerateCode , cMaxBlockSize , (LPARAM)(pCode+iLen) );
+                    iLen += g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , g_ptOrder , CM_GenerateCode , cMaxBlockSize , (LPARAM)(pCode+iLen) );
                     if (iLen >= cMaxBlockSize) {
                         pCodeBlocks[iBlockCount++] = realloc(pCode, iLen);
                         pCodeBlocks[iBlockCount] = malloc(cMaxBlockSize*2);
@@ -207,34 +235,22 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     // ------------- Diagram functions -------------
-    int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
-        //if the cached index is correct then great return it and the pin number!
-        //printf("cached index=%i uID=%i pin=%i\n",tConnect->uIndexHint,tConnect->uUniqueID,tConnect->uTargetPin);
-        _with( aObject(tConnect->uIndexHint) ) {
-            //printf("obj uID=%i\n",w->uUniqueID);
-            if ( w->uUniqueID == tConnect->uUniqueID ) {
-                *piPinNum = tConnect->uTargetPin;
-                //puts("found cached");
-                return tConnect->uIndexHint;
-            }
+
+    int GetPinType( int iObject , int iPinNum ) {
+        _with(aObject(iObject)) {
+            int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
+            if (iPinNum <= iPinCnt) { return pinInput; }
+            iPinCnt += g_ClassInterface[w->iClassID].bOutPins;
+            if (iPinNum <= iPinCnt) { return pinOutput; }
+            iPinCnt += g_ClassInterface[w->iClassID].bExecPins;
+            if (iPinNum <= iPinCnt) { return pinExec; }
         } _endwith;
-        //otherwise we search all elements to find its new position
-        //puts("searching all");
-        for (int i=0 ; i<iObjCount; i++ ) {
-            _with( aObject(i) ) {
-                if ( w->uUniqueID == tConnect->uUniqueID ) {
-                    tConnect->uIndexHint = i;
-                    *piPinNum = tConnect->uTargetPin;
-                    return i;
-                }
-            } _endwith;
-        }
-        //and at least, if reaches here then it's not found
-        if (piPinNum) { *piPinNum = 0; }
-        return -1;
+        return pinNone;
     }
+
+
     int PinPositionFromObject( int iIndex, char bPinID , int* piX , int* piY ) {
-        if (iIndex < 0 || iIndex >= iObjCount) { return 0; }
+        if (iIndex < 0 || iIndex >= g_iObjCount) { return 0; }
         if (bPinID < 1) { return 0; }
         _with( aObject(iIndex) ) {
             int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
@@ -263,45 +279,23 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
     // source object and source pin to start connection
     void StartConnectingPin( int iSrcObject, int iSrcPin ) { //Initiate the drag to connect objects
-        if (iSrcObject < 0 || iSrcObject >= iObjCount) { return; }
+        if (iSrcObject < 0 || iSrcObject >= g_iObjCount) { return; }
         if (!iSrcPin) { return; }
         iSelectedIndex = iSrcObject; bConnectingPin = iSrcPin;
-        printf("Selected pin %i\n",iSrcPin);
-        _with(aObject(iSrcObject)) {
-            int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
-            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinInput; puts("Input Pin"); return; }
-            iPinCnt += g_ClassInterface[w->iClassID].bOutPins;
-            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinOutput; puts("Output Pin"); return; }
-            iPinCnt += g_ClassInterface[w->iClassID].bExecPins;
-            if (iSrcPin <= iPinCnt) { bConnectingPinType = pinExec; puts("Exec Pin"); return; }
-        } _endwith;
+        //printf("Selected pin %i\n",iSrcPin);
+        if (!(bConnectingPinType = GetPinType( iSrcObject , iSrcPin ))) { return; }
     }
     // target object and target pin to check or add connection
     #define CancelConnectingPin() ActConnectingPin( -1 , 0 , 1 )
     #define CheckConnectingPin( _Obj , _Pin ) ActConnectingPin( _Obj , _Pin , 0 )
     #define AddConnectingPin( _Obj , _Pin ) ActConnectingPin( _Obj , _Pin , 1 )
-    int  ActConnectingPin( int iTgtObject, int iTgtPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
-        #define _CancelConnection() { if (bAddPin) { puts("Cancelled connecting pin"); bConnectingPin = 0; }; return 0; }
-        //printf("Obj=%i Pin=%i Add=%i\n",iObject,iPin,bAddPin);
-        //cancels the connection when iTgtPin is 0, while adding pin.
-        if (!iTgtPin && bAddPin) {  _CancelConnection(); }
 
-        //invalid/null object, or pin... make checks to fail (connecting to self is also invalid)
-        _const iSrcObject = iSelectedIndex; _const iSrcPin = bConnectingPin; _const bSrcPinType = bConnectingPinType;
-        if ((iTgtObject<0 || !iTgtPin) || ( iTgtObject==iSrcObject)) { _CancelConnection(); }
-        _const bTgtPinType = PinPositionFromObject( iTgtObject , iTgtPin , 0 , 0 );
-        if (bTgtPinType == bSrcPinType) { _CancelConnection(); }
-        if (!bAddPin) { return 1; } //just checking if a connection is possible
-
-        //add the connection to the object...
-        //should we add to both objects for cross check?
-        //making the user responsible for proper source->target direction is bad i guess
-        //so if we don't add to both, we need to add an "input pin" to an "output pin"
-        //meaning source/target objects can be swapped? exec pins are callback to function not to pins?
-
-        //printf("Adding connection from %i.%i to %i.%i\n", iSrcObject, iSrcPin, iTgtObject, iTgtPin);
+    #define CheckInsertConnectionPin( _SO , _SP , _TO , _TP ) MayInsertConnectionPin( _SO , _SP , _TO , _TP , false )
+    #define InsertConnectionPin( _SO , _SP , _TO , _TP ) MayInsertConnectionPin( _SO , _SP , _TO , _TP , true )
+    int MayInsertConnectionPin( int iSrcObject , int iSrcPin , int iTgtObject , int iTgtPin , BOOL bAddPin /* = 0 */ ) {
+        int iConnCnt = 0;
         _with( aObject(iTgtObject) ) {
-            ConnectorStruct* pCon = &w->tConnector; int iConnCnt = 0;
+            ConnectorStruct* pCon = &w->tConnector;
             if (pCon->uConnector) {
                 iConnCnt = 1;  //if connector is not empty then there's 1 element
                 if (!pCon->uOneConnector) { //but then... if uOneConnector is 0 there's more than 1 element
@@ -309,8 +303,17 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 }
             }
 
-            //TODO: check if EXACT the connection already exists, if so then cancel it
-            //because it's possible to emit the same string twice but they should use separate path's
+            _auto uuid = aObject(iSrcObject).uUniqueID;
+            // check if srcObject + SrcPin already exists in connectors list
+            for (int i=0 ; i<iConnCnt ; i++) {
+                if (pCon[i].uUniqueID == uuid) {
+                   if ((pCon[i].uSourcePin == iSrcPin) && (pCon[i].uTargetPin == iTgtPin)) {
+                       if (bAddPin) { puts("Connection already exist..."); }
+                       return -1;
+                   }
+                }
+            }
+            if (!bAddPin) { return iConnCnt; }
 
             //printf("Connectors: %i\n", iConnCnt);
 
@@ -326,11 +329,37 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 g_pListConnectors[w->tConnector.uListID]=pCon;
                 w->tConnector.uListSize++;
             }
-            pCon[iConnCnt].uUniqueID = aObject(iSrcObject).uUniqueID;
+            pCon[iConnCnt].uUniqueID = uuid;
             pCon[iConnCnt].uIndexHint = iSrcObject;
-            pCon[iConnCnt].uSourcePin = iTgtPin;
-            pCon[iConnCnt].uTargetPin = iSrcPin; //this also sets .uOneConnector
+            pCon[iConnCnt].uSourcePin = iSrcPin;
+            pCon[iConnCnt].uTargetPin = iTgtPin; //this also sets .uOneConnector
         } _endwith
+        return iConnCnt+1;
+    }
+
+    int  ActConnectingPin( int iTgtObject, int iTgtPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
+        #define _CancelConnection() { if (bAddPin) { puts("Cancelled connecting pin"); bConnectingPin = 0; }; return 0; }
+        //printf("Obj=%i Pin=%i Add=%i\n",g_iObject,iPin,bAddPin);
+        //cancels the connection when iTgtPin is 0, while adding pin.
+        if (!iTgtPin && bAddPin) {  _CancelConnection(); }
+
+        //invalid/null object, or pin... make checks to fail (connecting to self is also invalid)
+        _const iSrcObject = iSelectedIndex; _const iSrcPin = bConnectingPin; _const bSrcPinType = bConnectingPinType;
+        if ((iTgtObject<0 || !iTgtPin) || ( iTgtObject==iSrcObject)) { _CancelConnection(); }
+        _const bTgtPinType = PinPositionFromObject( iTgtObject , iTgtPin , 0 , 0 );
+        if (bTgtPinType == bSrcPinType) { _CancelConnection(); }
+        if (CheckInsertConnectionPin( iSrcObject , iSrcPin , iTgtObject , iTgtPin )<0) { _CancelConnection(); }
+        if (!bAddPin) { return 1; } //just checking if a connection is possible
+
+        //add the connection to the object...
+        //should we add to both objects for cross check?
+        //making the user responsible for proper source->target direction is bad i guess
+        //so if we don't add to both, we need to add an "input pin" to an "output pin"
+        //meaning source/target objects can be swapped? exec pins are callback to function not to pins?
+
+        //printf("Adding connection from %i.%i to %i.%i\n", iSrcObject, iSrcPin, iTgtObject, iTgtPin);
+        InsertConnectionPin( iSrcObject , iSrcPin , iTgtObject , iTgtPin );
+        InsertConnectionPin( iTgtObject , iTgtPin , iSrcObject , iSrcPin );
 
         bConnectingPin = 0; return 1;
         #undef _CancelConnection
@@ -345,7 +374,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //if max size/indexes need to be found, do it now
         if (iMaxXIdx < 0) {
             iMaxX = iMaxY = -1;
-            for (int i=0 ; i < iObjCount ; i++ ) {
+            for (int i=0 ; i < g_iObjCount ; i++ ) {
                 _with( aObject(i) ) {
                     if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW); iMaxXIdx=i; }
                     if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH); iMaxYIdx=i; }
@@ -381,12 +410,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetBkMode( hdc , TRANSPARENT );
         if (GetFocus()==hwnd) { DrawFocusRect( hdc , &tRc ); }
 
-        if (!ptOrder) { return; }
+        if (!g_ptOrder) { return; }
         //puts("drawing start");
 
-        if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
+        if (iStartIdx >= g_iObjCount) { iStartIdx = g_iObjCount-1; }
         if (iStartIdx < 0) { iStartIdx = 0; }
-        if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
+        if (iEndIdx >= g_iObjCount) { iEndIdx = g_iObjCount-1; }
 
         for ( ; iStartIdx>0 ; iStartIdx-- ) {
             _with( aObject(iStartIdx-1) ) {
@@ -402,8 +431,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iFontWidth = tFontSz.cx/3; iFontHeight = iFontSize = tFontSz.cy;
         }
 
-        for ( iIndex=iStartIdx ; (iIndex < iObjCount) ; iIndex++) {
-            if (iIndex < (iObjCount-1)) {
+        for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++) {
+            if (iIndex < (g_iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
                     //check/skip if item is invisible (caused by moving or scroll down)
                     if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { iStartIdx += 1 ; continue ; }
@@ -431,8 +460,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                             if (iTgtIdx < 0) { puts("Internal error drawing connector"); continue; }
                             //printf("Connection #%i: Index = %i, Pin = %i\n",iCon,iTgtIdx,iTgtPin);
                             int iX,iY,iXX,iYY;
-                            PinPositionFromObject( iIndex  , w->uSourcePin , &iXX , &iYY );
-                            PinPositionFromObject( iTgtIdx , iTgtPin , &iX , &iY );
+                            if (GetPinType( iIndex , w->uSourcePin ) < GetPinType( iTgtIdx , iTgtPin )) {
+                                PinPositionFromObject( iIndex  , w->uSourcePin , &iXX , &iYY );
+                                PinPositionFromObject( iTgtIdx , iTgtPin , &iX , &iY );
+                            } else {
+                                PinPositionFromObject( iIndex  , w->uSourcePin , &iX , &iY );
+                                PinPositionFromObject( iTgtIdx , iTgtPin , &iXX , &iYY );
+                            }
                             for (int iN=0; iN<3; iN++) {
                                 const int iOX = (iN & 1), iOY = (iN/2);
                                 const POINT atBezier[] = {
@@ -500,25 +534,27 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //tell object to draw itself
                 tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
                 //if (iIndex==0) printf("(draw) content=%p\n", w->Content);
-                g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , WM_PAINT , 0 , (LPARAM)&tObjRc );
+                g_ClassInterface[w->iClassID].pfHandlerProc( w->Content , NULL , WM_PAINT , 0 , (LPARAM)&tObjRc );
 
             } _endwith;
         }
 
-        iEndIdx=(iIndex < iObjCount ? iIndex-1 : iObjCount-1);
+        iEndIdx=(iIndex < g_iObjCount ? iIndex-1 : g_iObjCount-1);
 
         //draw dragging connection if any
         if (bConnectingPin) {
             //bConnectingPin have the PIN, iSelectedIndex have the object, iMouseX/iMouseY have the mouse position
             //tracing a path from the selected pin to the mouse position
-            int iX,iY, iXX, iYY; pbConnectingCursor = IDC_NO;
-            if (PinPositionFromObject( iSelectedIndex , bConnectingPin , &iX , &iY )) {
+            int iX,iY, iXX, iYY, iSrcType=0, iTgtType=0; pbConnectingCursor = IDC_NO;
+            if (iSrcType = PinPositionFromObject( iSelectedIndex , bConnectingPin , &iX , &iY )) {
                 iXX = iMouseX; iYY = iMouseY;
                 _auto hpConnecting = hpConnectingBad; //default to bad connection
                 if ( CheckConnectingPin( iHoverIndex , bHoverPin ) ) {
-                    _const bPinType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
+                    iTgtType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
                     hpConnecting = hpConnectingGood; pbConnectingCursor = IDC_CONNECT;
                 }
+                if (iTgtType > iSrcType) { SWAP(iX,iXX) ; SWAP(iY,iYY) ; }
+
                 _const hOldPen = SelectObject( hdc , hpConnecting );
                 for (int iN=0; iN<3; iN++) {
                     const int iOX = (iN & 1), iOY = (iN/2);
@@ -563,10 +599,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     int InsertObject( int iPosX , int iPosY , int iClassID ) {
         //increase storage if needed
-        if (iObjCount >= iObjMaxCount) {
-            iObjMaxCount += _MaxAllocationGap;
-            ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
-            printf("Reallocate (expand) to %i objects\n",iObjMaxCount);
+        if (g_iObjCount >= g_iObjMaxCount) {
+            g_iObjMaxCount += _MaxAllocationGap;
+            g_ptOrder = realloc( g_ptOrder , g_iObjMaxCount*sizeof(*g_ptOrder) );
+            printf("Reallocate (expand) to %i objects\n",g_iObjMaxCount);
             //todo: check for faillure
         }
 
@@ -578,16 +614,16 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //and if this was a linked list then i could put the index into the
         //data itself, but it would need to be a double linked list. or a slow check
         int iNew;
-        for (iNew = iObjCount ; iNew > 0 ; iNew--) {
+        for (iNew = g_iObjCount ; iNew > 0 ; iNew--) {
             _with( aObject(iNew-1) ) {
               if ((_Grid2Pix(w->iY)) < iPosY) { break; }
-              ptOrder[iNew] = ptOrder[iNew-1];
+              g_ptOrder[iNew] = g_ptOrder[iNew-1];
             } _endwith;
         }
         //initialize new slot
         _auto pClsInfo = &g_ClassInterface[iClassID];
         //printf("MinBytesConstructor: %i\n", pClsInfo->iMinBytesConstructor);
-        ptOrder[iNew] = malloc(sizeof(**ptOrder)+pClsInfo->iMinBytesConstructor);
+        g_ptOrder[iNew] = malloc(sizeof(**g_ptOrder)+pClsInfo->iMinBytesConstructor);
         _with( aObject(iNew) ) {
             w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
             w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
@@ -601,7 +637,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
         } _endwith;
-        iObjCount++; iObjTotal++;
+        g_iObjCount++; iObjTotal++;
         iSelectedIndex = iNew;
         SetUpdate();
         return iNew;
@@ -619,25 +655,35 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iXX = _Grid2Pix(w->iX + w->iW);
             iYY = _Grid2Pix(w->iY + w->iH);
             w->iW = 0;
+            //free connectors
+            if (w->tConnector.uConnector) {
+                if (!w->tConnector.uOneConnector) {
+                    free( g_pListConnectors[w->tConnector.uListID] );
+                    g_pListConnectors[w->tConnector.uListID] = 0;
+                    g_iListConnectorsCount--;
+                }
+            }
+            w->tConnector.uConnector = 0;
+            ReleaseUniqueID( w->uUniqueID );
         } _endwith;
 
-        free( ptOrder[iIndex] ); ptOrder[iIndex] = 0;
+        free( g_ptOrder[iIndex] ); g_ptOrder[iIndex] = 0;
 
         //removing last is simple but otherwise we need to close the gap
-        iObjCount--;
-        if (iIndex != iObjCount) {
-            memmove( ptOrder+iIndex , ptOrder+iIndex+1 , sizeof(*ptOrder)*(iObjCount-iIndex) );
+        g_iObjCount--;
+        if (iIndex != g_iObjCount) {
+            memmove( g_ptOrder+iIndex , g_ptOrder+iIndex+1 , sizeof(*g_ptOrder)*(g_iObjCount-iIndex) );
         }
 
         if (iIndex == iStartIdx) { iStartIdx++; }
         if (iIndex == iEndIdx) { iEndIdx--; }
-        if (iStartIdx >= iObjCount) { iStartIdx = iObjCount-1; }
-        if (iEndIdx >= iObjCount) { iEndIdx = iObjCount-1; }
+        if (iStartIdx >= g_iObjCount) { iStartIdx = g_iObjCount-1; }
+        if (iEndIdx >= g_iObjCount) { iEndIdx = g_iObjCount-1; }
         if (iStartIdx < 0) { iStartIdx = 0; }
 
         if ( iSelectedIndex == iIndex ) {
             if ( (iSelectedIndex > 0) ) { iSelectedIndex--; }
-            if ( !iObjCount ) { iSelectedIndex = -1; }
+            if ( !g_iObjCount ) { iSelectedIndex = -1; }
             if (iSelectedIndex >= 0) {
                 _with( aObject(iSelectedIndex) ) {
                     if ( (_Grid2Pix(w->iY)-iViewY) < 0 || (_Grid2Pix(w->iY+w->iH)-iViewY) > iBufHei ) {
@@ -652,10 +698,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         } //endif
 
         //shrink if too much space left in order buffer...
-        if ( iObjCount <= ((iObjMaxCount-_MaxAllocationGap)-((_MaxAllocationGap)/2)) ) {
-            iObjMaxCount -= _MaxAllocationGap;
-            ptOrder = realloc( ptOrder , iObjMaxCount*sizeof(*ptOrder) );
-            printf("Reallocate (srhink) to %i objects\n",iObjMaxCount);
+        if ( g_iObjCount <= ((g_iObjMaxCount-_MaxAllocationGap)-((_MaxAllocationGap)/2)) ) {
+            g_iObjMaxCount -= _MaxAllocationGap;
+            g_ptOrder = realloc( g_ptOrder , g_iObjMaxCount*sizeof(*g_ptOrder) );
+            printf("Reallocate (srhink) to %i objects\n",g_iObjMaxCount);
             //todo: check for faillure
         }
 
@@ -668,9 +714,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     int ObjectFromPoint( POINT pt , /*OUT*/ RECT* pRect ) {
         static int iCachedIndex = -1;
         //if no objects, clear cache and return
-        if ((!ptOrder) || ( !iObjCount )) { return iCachedIndex = -1; }
+        if ((!g_ptOrder) || ( !g_iObjCount )) { return iCachedIndex = -1; }
         //if index is cached and valid, use it first
-        if ( (iCachedIndex != -1) && (iCachedIndex < iObjCount) ) {
+        if ( (iCachedIndex != -1) && (iCachedIndex < g_iObjCount) ) {
             _with( aObject(iCachedIndex) ) {
                 const RECT tRc = {
                     .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
@@ -727,9 +773,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
             } _endwith;
             //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
-            LPARAM const tClick = GetMessagePos(); ppEditObj = ptOrder+iIndex;
+            LPARAM const tClick = GetMessagePos(); ppEditObj = g_ptOrder+iIndex;
             //DiagramObjectStruct* pTemp = *ppEditObj; printf("%p = %p\n",pTemp->Content, w->Content);
-            const _auto bProceed = g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
+            const _auto bProceed = g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
             if (!bProceed) { DestroyWindow( hwndEdit ); hwndEdit = NULL ; ppEditObj = NULL; return; }
             hwndOrgProc = (void*)SetWindowLongPtr( hwndEdit , GWLP_WNDPROC , (LONG_PTR)CtlEditProc );
             SendMessage( hwndEdit , WM_SETFONT , (WPARAM)hCtlFont , 0);
@@ -737,7 +783,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         } else {
             if (hwndEdit) {
                 int iEndOrCancel = iIndex ? CM_CancelEdit : CM_EndEdit;
-                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , iEndOrCancel , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
+                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL ,  iEndOrCancel , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
                 HWND hwndTemp = hwndEdit; hwndEdit = NULL ; ppEditObj = NULL;
                 DestroyWindow( hwndTemp ); SetUpdate();
             }
@@ -749,8 +795,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
             pDiagram = pNewDiagram;
             _with( *pDiagram ) {
-                ptOrder = w->pObjects;
-                iObjCount = w->iObjectCount; iObjMaxCount = w->iObjectMaxCount;
+                g_ptOrder = w->pObjects;
+                g_iObjCount = w->iObjectCount; g_iObjMaxCount = w->iObjectMaxCount;
                 //restore from cached (when it makes sense)
                 iSelectedIndex = w->iSelectedIdx;
                 iMaxXIdx = iMaxYIdx = -1;
@@ -767,9 +813,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     void WriteBackDiagram() { //save current diagram state back into the file structure
         if (pDiagram) {
             _with( *pDiagram ) {
-                w->pObjects = ptOrder;
-                w->iObjectCount = iObjCount;
-                w->iObjectMaxCount = iObjMaxCount;
+                w->pObjects = g_ptOrder;
+                w->iObjectCount = g_iObjCount;
+                w->iObjectMaxCount = g_iObjMaxCount;
                 ///update view cache
                 w->iViewX = iViewX;
                 w->iViewY = iViewY;
@@ -789,15 +835,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (!pFile) return NULL;
 
         pFile->iObjectMaxCount = _MaxAllocationGap;
-        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
-        if (!ptOrder) { free(pFile); return NULL; }
+        DiagramObjectStruct** g_ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*g_ptOrder));
+        if (!g_ptOrder) { free(pFile); return NULL; }
 
         //initialize file name
         strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
         int iPosY=8/_GridSize, iPosX=0 , iObjCount = 0;
         { //sample string
-            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+12);
+            g_ptOrder[iObjCount] = malloc(sizeof(**g_ptOrder)+sizeof(ClsStringStruct)+12);
             _with( aObject(iObjCount) ) {
                 w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
                 w->iY = iPosY       ; w->iH = 48/_GridSize;
@@ -815,7 +861,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             iObjCount++;
         }
         { //sample device
-            ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+            g_ptOrder[iObjCount] = malloc(sizeof(**g_ptOrder)+sizeof(ClsStdOutStruct));
             _with( aObject(iObjCount) ) {
                 w->iX = 8/_GridSize ; w->iW = 128/_GridSize;
                 w->iY = iPosY       ; w->iH = 48/_GridSize;
@@ -844,8 +890,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (!pFile) return NULL;
 
         pFile->iObjectMaxCount = _MaxAllocationGap;
-        DiagramObjectStruct** ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*ptOrder));
-        if (!ptOrder) { free(pFile); return NULL; }
+        DiagramObjectStruct** g_ptOrder = pFile->pObjects = malloc(pFile->iObjectMaxCount*sizeof(*g_ptOrder));
+        if (!g_ptOrder) { free(pFile); return NULL; }
 
         strncpy( pFile->zName , pzName , _countof(pFile->zName) );
 
@@ -855,7 +901,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (rand()&1) { //sample string
                 int iLen = 1+_rnd(16), iWid = 48/_GridSize+iLen;
                 if (iWid > 255) iWid = 255;
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStringStruct)+iLen+1);
+                g_ptOrder[iObjCount] = malloc(sizeof(**g_ptOrder)+sizeof(ClsStringStruct)+iLen+1);
                 _with( aObject(iObjCount) ) {
                     w->iX = iPosX ; w->iW = iWid;
                     w->iY = iPosY ; w->iH = 48/_GridSize+_rnd(4);
@@ -872,7 +918,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     w->zContent[iLen] = 0;
                 } _endwith
             } else { //sample device
-                ptOrder[iObjCount] = malloc(sizeof(**ptOrder)+sizeof(ClsStdOutStruct));
+                g_ptOrder[iObjCount] = malloc(sizeof(**g_ptOrder)+sizeof(ClsStdOutStruct));
                 _with( aObject(iObjCount) ) {
                     w->iX = iPosX       ; w->iW = 128/_GridSize;
                     w->iY = iPosY       ; w->iH = 48/_GridSize+_rnd(4);
@@ -1039,16 +1085,16 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             if (bMoved) { //if moved then may reorder,scroll
                 while (1) { //reorder the dragging object
-                    if (iSelectedIndex < (iObjCount-1)) {
+                    if (iSelectedIndex < (g_iObjCount-1)) {
                         const int iNextY = aObject(iSelectedIndex+1).iY;
                         if ( (iNewY > iNextY) || ((iNewY==iNextY) && (iNewX > aObject(iSelectedIndex+1).iX)) ) {
-                            SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
+                            SWAP( g_ptOrder[iSelectedIndex] , g_ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
                         } //endif
                     } //endif
                     if (iSelectedIndex > 0) {
                         const int iPrevY = aObject(iSelectedIndex-1).iY;
                         if ( (iNewY < iPrevY) || ((iNewY==iPrevY) && (iNewX < aObject(iSelectedIndex-1).iX)) ) {
-                            SWAP( ptOrder[iSelectedIndex] , ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
+                            SWAP( g_ptOrder[iSelectedIndex] , g_ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
                         } //endif
                     } //endif (iSelectedIndex > 0) {
                     break;

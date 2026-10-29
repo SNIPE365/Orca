@@ -6,6 +6,7 @@ typedef struct {
 } ClsStringStruct;
 
 LRESULT fnClsStringHandler( _ClassPrototype ) {
+    DiagramObjectStruct* pObj = ((DiagramObjectStruct*)pObjectList);
     DiagramObjectStruct* pDiagram = ((DiagramObjectStruct*)pObject)-1;
     _with( *(ClsStringStruct*)pObject; ) {
         switch (message) {
@@ -34,10 +35,8 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 #define emitf(...) iLen += sprintf( pBuffer+iLen , __VA_ARGS__ )
                 char* pBuffer = (char*)lParam; int32_t iBufSz = (int32_t)wParam, iLen=0;
                 emitf( "  char* %s = \"" , pDiagram->zName );
-                puts( pDiagram->zName );
                 iLen += EmitSafeString( pBuffer+iLen , iBufSz-iLen , w->zContent , w->iLength );
                 emitf( "%s" , "\";\n" );
-                strcpy( g_ScratchBuffer , pDiagram->zName );
                 return iLen;
                 #undef emitf
             }
