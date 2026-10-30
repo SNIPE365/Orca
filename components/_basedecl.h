@@ -17,6 +17,7 @@ void* objReallocContent( void** pObject , uint32_t iLength ) {
 
 // enumerate connectors assigned to an object
 int objGetConnectedPin( void* pObject , void* pObjectList , int iQueryIndex , DiagramObjectStruct **pSrcObject , int *piPin , int*piPinType ) {
+    _const ptOrder = g_ptOrder;
     _const pObj = (DiagramObjectStruct*)pObject;
     _const pList = (DiagramObjectStruct*)pObjectList;
     int iConnCount = 0;
