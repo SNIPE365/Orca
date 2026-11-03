@@ -1,12 +1,10 @@
 #include <windows.h>
-#include <winscard.h>
+#include <math.h>
+
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
-//todo: make connectors part of file structure
-//todo: make usage and list arrays pointers instead of duplication from file structure
-//todo: properly remove connections from delete items
-//todo: string iteration should be done in vertical order (so sort connectors vertically?)
+//TODO: clicking on connector highlights it? or edits already from source to target?
 
 _const _MaxAllocationGap = 128;
 _const _GridSize = 8;
@@ -20,7 +18,7 @@ typedef struct {
         uint32_t uConnector;
         struct {
             uint32_t uIndexHint   :12; //max 5096 objects per file
-            uint32_t uUniqueID    :12; //Unique ID of source connector
+            uint32_t uUniqueID    :12; //Unique ID of target object
             uint32_t uSourcePin   : 4;
             uint32_t uTargetPin   : 4; //non zero
         };
@@ -49,15 +47,15 @@ typedef struct {
 } DiagramObjectStruct;
 typedef struct {
     char zName[31], zZero;
-    int iObjectCount;
-    int iObjectMaxCount;
+    int iObjectCount, iObjectMaxCount;
     DiagramObjectStruct** pObjects;
+    int iListConnectorsCount, iListConnectorsMaxCount;
+    ConnectorStruct **pListConnectors;   //array of lists for connectors
+    char bUsedIDs[16384/8]; //bitmap of used IDs (1 bit per ID)
     //cache members
     int iViewX, iViewY; //in pixels
     int iSelectedIdx;
-    char bUsedIDs[16384/8]; //bitmap of used IDs (1 bit per ID)
 } DiagramFileStruct;
-
 DiagramFileStruct* g_ProjectFiles[256]; int g_ProjectFileCount = 0;
 
 typedef enum { //Diagram custom messages
@@ -89,15 +87,19 @@ int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
     _const ptOrder = g_ptOrder;
     //if the cached index is correct then great return it and the pin number!
     //printf("cached index=%i uID=%i pin=%i\n",tConnect->uIndexHint,tConnect->uUniqueID,tConnect->uTargetPin);
-    _with( aObject(tConnect->uIndexHint) ) {
-        //printf("obj uID=%i -> ",w->uUniqueID);
-        if ( w->uUniqueID == tConnect->uUniqueID ) {
-            *piPinNum = tConnect->uTargetPin;
-            //printf("cached at %i\n",tConnect->uIndexHint);
-            return tConnect->uIndexHint;
-        }
-    } _endwith;
+    int iIndex = tConnect->uIndexHint;
+    if ( iIndex >= 0 && iIndex < g_iObjCount ) {
+        _with( aObject(tConnect->uIndexHint) ) {
+            //printf("obj uID=%i -> ",w->uUniqueID);
+            if ( w->uUniqueID == tConnect->uUniqueID ) {
+                *piPinNum = tConnect->uTargetPin;
+                //printf("cached at %i\n",tConnect->uIndexHint);
+                return tConnect->uIndexHint;
+            }
+        } _endwith;
+    }
     //otherwise we search all elements to find its new position
+    //printf("searching elements for matching with UUID: %i\n",tConnect->uUniqueID);
     for (int i=0 ; i<g_iObjCount; i++ ) {
         _with( aObject(i) ) {
             if ( w->uUniqueID == tConnect->uUniqueID ) {
@@ -146,7 +148,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iFreeSlotCount=0, iObjTotal=0;       //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                    //maximum position of any existing object (pixels)
     static int iViewX=0, iViewY=0;                  //scrolling offset (pixels)
-    static char bUsedIDs[16384/8];                  //bitmap of used IDs (1 bit per ID)
     static int iMaxXIdx=-1 , iMaxYIdx=-1;           //indexes for the objects that have the maximum position (cache)
     static int iStartIdx=0, iEndIdx=-1;             //start/end indexes for drawn objects (cache)
     static int iSelectedIndex=-1,iHoverIndex=-1;    //current selected index // hovered index
@@ -161,6 +162,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bConnectingPin=0;                    //selected pin number when adding a connection
     static char bConnectingPinType=0;                //selected pin type when adding a connection
     static void* pbConnectingCursor = NULL;
+    static char *g_pbUsedIDs= NULL;                    //bitmap of used IDs (1 bit per ID)
     static DiagramFileStruct* pDiagram = NULL;
     static ConnectorStruct **g_pListConnectors = NULL;                     //array of lists for connectors
     static int g_iListConnectorsCount = 0, g_iListConnectorsMaxCount = 0;  //count max size of those lists
@@ -172,6 +174,34 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     #include "../components/_basedecl.h"
 
+    void SortConnections( DiagramFileStruct *pFile ) {
+        DiagramObjectStruct **ptOrder = pFile->pObjects;
+        //sort the connection order of this object based on their Y position in the diagram
+        for (int iObject=0 ; iObject < pFile->iObjectCount ; iObject++  ) {
+            _with( aObject(iObject) ) {
+                ConnectorStruct* pCon = &w->tConnector;
+                if (pCon->uConnector && !pCon->uOneConnector) { //must have >1 element to sort
+                    int iConnCnt = pCon->uListSize; pCon = g_pListConnectors[pCon->uListID];
+                    for (int i=1 ; i<iConnCnt ; i++) {
+                        int iPinA, iPinB, ii=i;
+                        int iIdxA = IndexAndPinFromConnector( &pCon[i-1] , &iPinA );
+                        int iIdxB = IndexAndPinFromConnector( &pCon[i] , &iPinB );
+                        int iY1 = aObject(iIdxA).iY, iY2 = aObject(iIdxB).iY;
+                        while (iY2 <= iY1) {
+                            if (iY2 == iY1) { //if same sort by X
+                                int iX1 = aObject(iIdxA).iX, iX2 = aObject(iIdxB).iX;
+                                if (iX2 >= iX1) { break; }
+                            }
+                            ConnectorStruct tTmp = pCon[ii-1]; pCon[ii-1] = pCon[ii]; pCon[ii] = tTmp;
+                            ii-- ; iIdxB-- ; if (ii<=0) { break; }
+                            iIdxA = IndexAndPinFromConnector( &pCon[ii-1] , &iPinA );
+                            iY1 = aObject(iIdxA).iY;
+                        }
+                    }
+                }
+            } _endwith
+        }
+    }
     void GenerateFullCode( int iFileCount , DiagramFileStruct** pFile ) {
         #define emitf(...) iLen += sprintf( pCode+iLen , __VA_ARGS__ )
         _const cMaxBlockSize = 65536;
@@ -184,6 +214,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         for (int i=0 ; i < iFileCount ; i++ ) {
             ConsolePrintf("File #%i = '%s'\n", i, pFile[i]->zName);
             emitf( "int %s() {\r\n" , pFile[i]->zName );
+            SortConnections( pFile[i] );
             //list all objects in file
             for (int j=0 ; j < pFile[i]->iObjectCount ; j++ ) {
                 _with(*pFile[i]->pObjects[j]) {
@@ -223,7 +254,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         #undef emitf
     }
-
     int ListConnectorsNew() {
         if (!g_pListConnectors) { g_iListConnectorsCount=1; }
         if (g_iListConnectorsCount >= g_iListConnectorsMaxCount) {
@@ -241,8 +271,49 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return 0;
     }
 
-    // ------------- Diagram functions -------------
+    // ------------- Bezier Evalution functions ------------
+    POINT EvaluateCubicBezier(const POINT atBezier[4], float t) {
+        float u = 1.0f - t;
+        float tt = t * t;
+        float uu = u * u;
+        float uuu = uu * u;
+        float ttt = tt * t;
 
+        POINT p;
+        p.x = (LONG)(uuu * atBezier[0].x + 3.0f * uu * t * atBezier[1].x + 3.0f * u * tt * atBezier[2].x + ttt * atBezier[3].x);
+        p.y = (LONG)(uuu * atBezier[0].y + 3.0f * uu * t * atBezier[1].y + 3.0f * u * tt * atBezier[2].y + ttt * atBezier[3].y);
+        return p;
+    }
+    float DistanceToLineSegment(POINT p, POINT a, POINT b) {
+        float dx = (float)(b.x - a.x);
+        float dy = (float)(b.y - a.y);
+        float l2 = dx * dx + dy * dy;
+
+        if (l2 == 0.0f) {
+            return hypotf((float)(p.x - a.x), (float)(p.y - a.y));
+        }
+
+        float t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+        if (t < 0.0f) t = 0.0f;
+        if (t > 1.0f) t = 1.0f;
+
+        float projX = a.x + t * dx;
+        float projY = a.y + t * dy;
+
+        return hypotf((float)p.x - projX, (float)p.y - projY);
+    }
+    BOOL HitTestBezierMath(POINT clickPt, const POINT atBezier[4], float tolerancePx) {
+        const int STEPS = 16;
+        POINT prev = atBezier[0];
+        for (int i = 1; i <= STEPS; i++) {
+            float t = (float)i / (float)STEPS;
+            POINT current = EvaluateCubicBezier(atBezier, t);
+            if (DistanceToLineSegment(clickPt, prev, current) <= tolerancePx) { return TRUE; }
+            prev = current;
+        }
+        return FALSE;
+    }
+    // ------------- Diagram functions -------------
     int GetPinType( DiagramObjectStruct* pObject , int iPinNum ) {
         _with( *pObject ) {
             int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
@@ -397,6 +468,78 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         SetScrollInfo( hwnd , SB_VERT , &tInfoV , true );
         bUpdateScroll = 1;
     }
+    void MouseOverConnector(void) {
+        _const ptOrder = g_ptOrder;
+        if (!g_ptOrder) { return; }
+        RECT tRc = {0,0,iBufWid,iBufHei};
+        int iViewX = GetScrollPos( hwnd , SB_HORZ );
+        int iViewY = GetScrollPos( hwnd , SB_VERT );
+        if (iStartIdx >= g_iObjCount) { iStartIdx = g_iObjCount-1; }
+        if (iStartIdx < 0) { iStartIdx = 0; }
+        if (iEndIdx >= g_iObjCount) { iEndIdx = g_iObjCount-1; }
+        // verify if iStartIdx is valid
+        for ( ; iStartIdx>0 ; iStartIdx-- ) {
+            _with( aObject(iStartIdx-1) ) {
+                if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { break; }
+            } _endwith;
+        }
+
+        int iIndex;
+        for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++) {
+            if (iIndex < (g_iObjCount-1)) {
+                _with( aObject(iIndex+1) ) {
+                    //check/skip if item is invisible (caused by moving or scroll down)
+                    if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { iStartIdx += 1 ; continue ; }
+                } _endwith
+            }
+            _with( aObject(iIndex) ) {
+                //clculate position Y and see if it's after the visible area (early stop)
+                int iPosY = _Grid2Pix(w->iY)-iViewY, iPosX = _Grid2Pix(w->iX)-iViewX;
+                if (iPosY >= iBufHei) { break; }
+                //skip object if outside horizontal range
+                if ( (iPosX+_Grid2Pix(w->iW)) < 0 || iPosX >= iBufWid ) { continue; }
+
+                //draw connections
+                if (!w->tConnector.uConnector) { continue; } //continue if there isnt connections
+                ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1, iList=-1;
+                if (!ptList->uOneConnector) { //it's a list instead of a single connection
+                    iList = w->tConnector.uListID;
+                    iConCnt = ptList->uListSize;
+                    ptList = g_pListConnectors[iList];
+                }
+                //printf("Index: %i , Connections = %i List=(%i)%p\n",iIndex,iConCnt,iList,ptList);
+                for (int iCon=0 ; iCon < iConCnt ; iCon++) {
+                    _with (ptList[iCon]) {
+                        int iTgtPin = 0, iTgtIdx = IndexAndPinFromConnector( ptList+iCon , &iTgtPin );
+                        if (iTgtIdx < 0) { puts("Internal error connector"); continue; }
+                        //printf("Connection #%i > %i:%i to %i:%i\n",iCon,iIndex,w->uSourcePin,iTgtIdx,iTgtPin);
+                        int iX,iY,iXX,iYY;
+                        if (GetPinType( &aObject(iIndex) , w->uSourcePin ) < GetPinType( &aObject(iTgtIdx) , iTgtPin )) {
+                            PinPositionFromObject( iIndex  , w->uSourcePin , &iXX , &iYY );
+                            PinPositionFromObject( iTgtIdx , iTgtPin , &iX , &iY );
+                        } else {
+                            PinPositionFromObject( iIndex  , w->uSourcePin , &iX , &iY );
+                            PinPositionFromObject( iTgtIdx , iTgtPin , &iXX , &iYY );
+                        }
+                        const POINT atBezier[] = {
+                            {iX         , iY} ,
+                            {iX         , iYY} ,
+                            {(iX+iXX)/2 , (iY+iYY)/2} ,
+                            {iXX        , iYY}
+                        };
+                        POINT pt = {iMouseX,iMouseY};
+                        if ( HitTestBezierMath( pt , atBezier , _GridSize ) ) {
+                            puts("Clicked on a connector!");
+                            return;
+                        }
+                    } _endwith;
+                }
+
+            } _endwith;
+        }
+
+        iEndIdx=(iIndex < g_iObjCount ? iIndex-1 : g_iObjCount-1);
+    }
     void WindowDraw(void) {
         _const ptOrder = g_ptOrder;
         //check if there's previous items that are visible (caused by moving or scroll up)
@@ -425,6 +568,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (iStartIdx < 0) { iStartIdx = 0; }
         if (iEndIdx >= g_iObjCount) { iEndIdx = g_iObjCount-1; }
 
+        // verify if iStartIdx is valid
         for ( ; iStartIdx>0 ; iStartIdx-- ) {
             _with( aObject(iStartIdx-1) ) {
                 if ((_Grid2Pix(w->iY+w->iH)-iViewY) < 0) { break; }
@@ -438,8 +582,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             GetTextExtentPoint32( hDcBuffer , "AWI" , 1 , &tFontSz );
             iFontWidth = tFontSz.cx/3; iFontHeight = iFontSize = tFontSz.cy;
         }
-
-        for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++) {
+        iIndex=0;
+        for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++ ) {
             if (iIndex < (g_iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
                     //check/skip if item is invisible (caused by moving or scroll down)
@@ -458,6 +602,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             } _endwith
         }
+        //set iEndIdx to iStartIdx for easy walk later
+        iEndIdx = iStartIdx;
 
         for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++) {
             if (iIndex < (g_iObjCount-1)) {
@@ -476,10 +622,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //draw connections
                 if (w->tConnector.uConnector) { //there's connections???
                     ConnectorStruct* ptList = &w->tConnector; int iConCnt = 1, iList=-1;
-                    if (!w->tConnector.uOneConnector) { //it's a list instead of a single connection
+                    if (!ptList->uOneConnector) { //it's a list instead of a single connection
                         iList = w->tConnector.uListID;
-                        ptList = g_pListConnectors[iList]; iConCnt = w->tConnector.uListSize;
-
+                        iConCnt = ptList->uListSize;
+                        ptList = g_pListConnectors[iList];
                     }
                     //printf("Index: %i , Connections = %i List=(%i)%p\n",iIndex,iConCnt,iList,ptList);
                     for (int iCon=0 ; iCon < iConCnt ; iCon++) {
@@ -495,6 +641,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 PinPositionFromObject( iIndex  , w->uSourcePin , &iX , &iY );
                                 PinPositionFromObject( iTgtIdx , iTgtPin , &iXX , &iYY );
                             }
+
+                            // draw a path from iX,iY to iXX,iYY
+                            // taking in account routes without overlapping existing blocks
+                            // draws only vertical/horizontal lines from source/to target
+                            // without overlapping other objects
+                            //if
+                            //
                             for (int iN=0; iN<3; iN++) {
                                 const int iOX = (iN & 1), iOY = (iN/2);
                                 const POINT atBezier[] = {
@@ -505,6 +658,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 };
                                 PolyBezier( hdc , atBezier , 4 );
                             }
+
                         } _endwith;
                     }
                 }
@@ -622,7 +776,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return -1;
     }
     void ReleaseUniqueID( char* pbUsage , int iID) {
-        printf("releasing ID: %i\n",iID);
+        //printf("releasing ID: %i\n",iID);
         if (iID >= 0) pbUsage[iID/8] &= ~(1<<(iID%8));
     }
 
@@ -657,7 +811,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         _with( aObject(iNew) ) {
             w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
             w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
-            w->uUniqueID = ObtainUniqueID(bUsedIDs);
+            w->uUniqueID = ObtainUniqueID(g_pbUsedIDs);
             w->iClassID = iClassID;
             w->tConnector.uConnector = 0;
             sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
@@ -688,14 +842,62 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             w->iW = 0;
             //free connectors
             if (w->tConnector.uConnector) {
+                //puts("freeing connectors");
+                ConnectorStruct* pCon = &w->tConnector;
+                int uSrcUID = w->uUniqueID, uCount=1;
                 if (!w->tConnector.uOneConnector) {
-                    free( g_pListConnectors[w->tConnector.uListID] );
+                    //puts("freeing more than one connector");
+                    //walk trough each connector to remove the connector from the linked object
+                    pCon = g_pListConnectors[w->tConnector.uListID];
+                    uCount = w->tConnector.uListSize;
+                }
+                for (int i=0 ; i<uCount ; i++) {
+                    int iTgtPin = 0, iTgtIdx = IndexAndPinFromConnector( pCon+i , &iTgtPin );
+                    //printf("SrcIdx=%i Tgtidx=%i\n",iIndex,iTgtIdx);
+                    if (iTgtIdx < 0) { puts("Internal error removing connector"); continue; }
+                    _with( aObject(iTgtIdx) ) {
+                        ConnectorStruct* pTgtCon = &w->tConnector;
+                        if (pTgtCon->uConnector) { //target have connectors
+                            //printf("target(%i:%i) have connectors\n",iTgtIdx,w->uUniqueID);
+                            if (!pTgtCon->uOneConnector) { //target have more than 1 connector
+                                //puts("target have more than 1 connector");
+                                int uListID = pTgtCon->uListID;
+                                ConnectorStruct* pTgtList = g_pListConnectors[uListID];
+                                for (int j=0 ; j < pTgtCon->uListSize ; j++) {
+                                    if (pTgtList[j].uUniqueID == uSrcUID) {
+                                        //printf("Removing connector from %i.%i to %i.%i\n", iTgtIdx, iTgtPin, iIndex, pCon[i].uSourcePin);
+                                        memmove( pTgtList+j , pTgtList+j+1 , sizeof(*pTgtList)*(pTgtCon->uListSize-j-1) );
+                                        pTgtCon->uListSize--; j--; //retry with next connector
+                                        if (pTgtCon->uListSize == 1) {
+                                            //puts("target now have a single connector");
+                                            pTgtCon->uConnector = pTgtList[0].uConnector;
+                                            free( g_pListConnectors[uListID] );
+                                            g_pListConnectors[uListID] = 0;
+                                            g_iListConnectorsCount--;
+                                            break;
+                                        }
+                                        //break;
+                                    }
+                                }
+                            } else { //target have single connector
+                                //puts("target have single connection");
+                                //printf("tUID=%i sUID=%i\n",pTgtCon->uUniqueID,uSrcUID);
+                                if (pTgtCon->uUniqueID == uSrcUID) {
+                                    pTgtCon->uConnector = 0;
+                                    //puts("removed single connection");
+                                }
+                            }
+                        }
+                    } _endwith
+                }
+                if (!w->tConnector.uOneConnector) { //freeing connector lists if more than 1 connector
+                    free( pCon );
                     g_pListConnectors[w->tConnector.uListID] = 0;
                     g_iListConnectorsCount--;
                 }
+                w->tConnector.uConnector = 0; //no more conectors in this object
+                ReleaseUniqueID( g_pbUsedIDs , w->uUniqueID ); //release this object unique ID
             }
-            w->tConnector.uConnector = 0;
-            ReleaseUniqueID( bUsedIDs , w->uUniqueID );
         } _endwith;
 
         free( g_ptOrder[iIndex] ); g_ptOrder[iIndex] = 0;
@@ -827,8 +1029,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             SCROLLINFO tInfo = { .cbSize = sizeof(tInfo) , .fMask = SIF_POS };
             pDiagram = pNewDiagram;
             _with( *pDiagram ) {
-                g_ptOrder = w->pObjects;
                 g_iObjCount = w->iObjectCount; g_iObjMaxCount = w->iObjectMaxCount;
+                g_ptOrder = w->pObjects;                                //array of objects
+                g_pbUsedIDs = w->bUsedIDs;                              //array of used IDs in this file
+                g_iListConnectorsCount = w->iListConnectorsCount;
+                g_iListConnectorsMaxCount = w->iListConnectorsMaxCount;
+                g_pListConnectors = w->pListConnectors;                 //array of lists for connectors
                 //restore from cached (when it makes sense)
                 iSelectedIndex = w->iSelectedIdx;
                 iMaxXIdx = iMaxYIdx = -1;
@@ -837,7 +1043,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 ScrollUpdate( hwnd , -1 , -1 );
                 tInfo.nPos = iViewX ; SetScrollInfo( hwnd , SB_HORZ , &tInfo , TRUE );
                 tInfo.nPos = iViewY ; SetScrollInfo( hwnd , SB_VERT , &tInfo , TRUE );
-                memcpy( bUsedIDs , w->bUsedIDs , sizeof(bUsedIDs) );
                 SetUpdate();
             } _endwith
         }
@@ -845,14 +1050,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     void WriteBackDiagram() { //save current diagram state back into the file structure
         if (pDiagram) {
             _with( *pDiagram ) {
+                w->iObjectCount = g_iObjCount; w->iObjectMaxCount = g_iObjMaxCount;
                 w->pObjects = g_ptOrder;
-                w->iObjectCount = g_iObjCount;
-                w->iObjectMaxCount = g_iObjMaxCount;
+                w->iListConnectorsCount = g_iListConnectorsCount;
+                w->iListConnectorsMaxCount = g_iListConnectorsMaxCount;
+                w->pListConnectors = g_pListConnectors;
                 ///update view cache
                 w->iViewX = iViewX;
                 w->iViewY = iViewY;
                 w->iSelectedIdx = iSelectedIndex;
-                memcpy( w->bUsedIDs , bUsedIDs , sizeof(bUsedIDs) );
                 //GetScrollInfo( hwnd , SB_HORZ , &tInfo); w->iPosH = tInfo.nPos;
                 //GetScrollInfo( hwnd , SB_VERT , &tInfo); w->iPosV = tInfo.nPos;
             } _endwith
@@ -1351,6 +1557,25 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     if (iSelectedIndex != -1) { RemoveObject( iSelectedIndex ); }
                     break;
                 }
+                case VK_F1: {
+                    //enumerate all objects and connectors
+                    for (int i=0 ; i<g_iObjCount ; i++) {
+                        _with( aObject(i) ) {
+                            printf("Obj %i(ID=%i): %s (%i,%i) %ix%i\n",i,w->uUniqueID,w->zName,w->iX,w->iY,w->iW,w->iH);
+                            if (w->tConnector.uConnector) { //have connectors
+                                ConnectorStruct *pCon = &w->tConnector ; int uCount = 1;
+                                if (!w->tConnector.uOneConnector) {
+                                    pCon = g_pListConnectors[w->tConnector.uListID];
+                                    uCount = w->tConnector.uListSize;
+                                }
+                                for (int u=0 ; u<uCount ; u++) {
+                                    printf("  C%i from %i.%i to %i.%i\n",u,w->uUniqueID,pCon[u].uSourcePin,pCon[u].uUniqueID,pCon[u].uTargetPin);
+                                }
+                            }
+                        } _endwith;
+                    }
+                    break;
+                }
             } //switch
             return 0;
         }
@@ -1388,12 +1613,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //SetCapture( hwnd );
                 return 0;
             }
-
             //start of the dragging position
             if (iSelectedIndex >= 0) {
                 iDragStartX = (short)LOWORD(lParam)  ; iDragStartY = (short)HIWORD(lParam);
                 bDragging = 1; SetCapture( hwnd );
             }
+
+            MouseOverConnector();
 
 
             return 0;
