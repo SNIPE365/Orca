@@ -179,3 +179,117 @@ int ReadProcessOutput(const char* pzCommand, char** ppzOut_buffer , DWORD* piRet
 }
 
 void ConsolePrintf(const char* format, ...);
+
+/* clipboard.c - simple text clipboard helpers for Win32 (works on Win9x too)
+ *
+ * Build examples:
+ *   gcc  clipboard.c -o clip.exe -luser32
+ *   cl   clipboard.c user32.lib
+ */
+#include <windows.h>
+#include <stdlib.h>
+#include <string.h>
+
+/* Opens the clipboard, retrying a few times (another app may hold it briefly) */
+static BOOL OpenClipboardRetry( void )
+{
+    int i;
+    for( i = 0 ; i < 10 ; i++ ) {
+        if( OpenClipboard( NULL ) ) return TRUE;
+        Sleep( 10 );
+    }
+    return FALSE;
+}
+
+/* Puts a zero-terminated string on the clipboard (CF_TEXT).
+ * Returns 1 on success, 0 on failure. */
+int SetClipboard( char *pzText , size_t uLen ) {
+    HGLOBAL hMem;
+    char   *pDst;
+
+    if( pzText == NULL ) return 0;
+    if (uLen<0) { uLen = strlen( pzText ); }
+
+    hMem = GlobalAlloc( GMEM_MOVEABLE | GMEM_DDESHARE , uLen+1 );
+    if( hMem == NULL ) return 0;
+
+    pDst = (char*)GlobalLock( hMem );
+    if( pDst == NULL ) { GlobalFree( hMem ); return 0; }
+    memcpy( pDst , pzText , uLen );
+    pDst[uLen] = '\0';
+    GlobalUnlock( hMem );
+
+    if( !OpenClipboardRetry() ) { GlobalFree( hMem ); return 0; }
+    EmptyClipboard();
+
+    if( SetClipboardData( CF_TEXT , hMem ) == NULL ) {
+        /* ownership was NOT transferred, so we must free it */
+        CloseClipboard();
+        GlobalFree( hMem );
+        return 0;
+    }
+
+    /* on success the system owns hMem - do not free it */
+    CloseClipboard();
+    return 1;
+}
+
+/* Reads text from the clipboard.
+ *
+ *  pzOutBuff == NULL : a buffer is malloc'ed and returned (caller must free()).
+ *                      If piInOutSize is not NULL it receives the text length.
+ *  pzOutBuff != NULL : the text is copied into pzOutBuff, truncated so that it
+ *                      (plus the terminating zero) fits in *piInOutSize bytes.
+ *                      *piInOutSize is then set to the number of chars copied
+ *                      (not counting the terminator).
+ *
+ * Returns the buffer, or NULL on failure (*piInOutSize is set to 0 then). */
+char* GetClipboard( char *pzOutBuff , int *piInOutSize ) {
+    HANDLE  hData;
+    char   *pSrc;
+    char   *pRet = NULL;
+    size_t  uLen , uCopy;
+
+    if( pzOutBuff != NULL ) {
+        if( piInOutSize == NULL || *piInOutSize <= 0 ) return NULL;
+        pzOutBuff[0] = '\0';
+    }
+    if( piInOutSize ) {
+        if( pzOutBuff == NULL ) *piInOutSize = 0;
+    }
+
+    if( !OpenClipboardRetry() ) goto fail_nolock;
+
+    hData = GetClipboardData( CF_TEXT );
+    if( hData == NULL ) goto fail_close;
+
+    pSrc = (char*)GlobalLock( hData );
+    if( pSrc == NULL ) goto fail_close;
+
+    uLen = strlen( pSrc );
+
+    if( pzOutBuff == NULL ) {
+        pRet = (char*)malloc( uLen + 1 );
+        if( pRet ) {
+            memcpy( pRet , pSrc , uLen + 1 );
+            if( piInOutSize ) *piInOutSize = (int)uLen;
+        }
+    } else {
+        uCopy = (size_t)(*piInOutSize) - 1;     /* room for the terminator */
+        if( uLen < uCopy ) uCopy = uLen;
+        memcpy( pzOutBuff , pSrc , uCopy );
+        pzOutBuff[uCopy] = '\0';
+        *piInOutSize = (int)uCopy;
+        pRet = pzOutBuff;
+    }
+
+    GlobalUnlock( hData );
+    CloseClipboard();
+    return pRet;
+
+    fail_close:
+    CloseClipboard();
+    fail_nolock:
+    if( piInOutSize ) *piInOutSize = 0;
+    return NULL;
+}

@@ -39,6 +39,7 @@ LRESULT fnClsStdOutHandler( _ClassPrototype ) {
             case CM_BeginEdit:
             case CM_EndEdit:
                 break;
+            case CM_DupContent:
             default:
                 break;
         }

@@ -52,13 +52,21 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
                 HANDLE hCtlEdit = (HANDLE)wParam;
                 void** ppObject = (void**)lParam;
                 int32_t iLength = GetWindowTextLength( hCtlEdit );
-                typeof(w) pw = objReallocContent( ppObject , sizeof(*pObject)+iLength+1 );
+                typeof(w) pw = objReallocContent( ppObject , sizeof(*w)+iLength+1 );
                 pw->iLength = iLength; pw->iBuffer = iLength+1;
                 GetWindowText( hCtlEdit , pw->zContent , pw->iBuffer );
                 break;
             }
-            case CM_CancelEdit:   { //wParam = hCtlEdit // lParam = (void**)pObject
+            case CM_CancelEdit:   { //wParam = hCtlEdit // lParam = (void**)ppObject
                 break; // nothing todo here
+            }
+            case CM_DupContent:   { //lParam = (void*)ppObjectOut
+                void** ppObjectOut = (void**)lParam;
+                int iObjSz = sizeof(*w)+w->iBuffer;
+                typeof(w) pw = objReallocContent( ppObjectOut , iObjSz );
+                //printf("size = %i len=%i buf=%i\n"iObjSz,w->iLength,w->iBuffer);
+                memcpy( pw , w , iObjSz );
+                break;
             }
             default:
                 break;

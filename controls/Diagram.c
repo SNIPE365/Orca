@@ -81,38 +81,33 @@ static int g_iObjCount=0, g_iObjMaxCount=0;         //object counting / limit
 #define aObject(_I) (*ptOrder[_I])
 #define aObject_Content(_I,_T) (*((_T*)(ptOrder[_I]->Content)))
 
+// find the index from UID+Hint
+int IndexFromUID( int UID , int uIndexHint ) {
+    _const ptOrder = g_ptOrder;
+    //good hint?
+    if ( uIndexHint >= 0 && uIndexHint < g_iObjCount ) {
+        if (aObject(uIndexHint).uUniqueID == UID) return uIndexHint;
+    }
+    //no? then search for it
+    for (int i=0 ; i<g_iObjCount; i++ ) {
+        if (aObject(i).uUniqueID == UID) { return i; }
+    }
+    return -1;
+}
 // retrieve the index and pin number from a connector structure, using a cached index if available
 int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
     _const ptOrder = g_ptOrder;
     //if the cached index is correct then great return it and the pin number!
     //printf("cached index=%i uID=%i pin=%i\n",tConnect->uIndexHint,tConnect->uUniqueID,tConnect->uTargetPin);
     int iIndex = tConnect->uIndexHint;
-    if ( iIndex >= 0 && iIndex < g_iObjCount ) {
-        _with( aObject(tConnect->uIndexHint) ) {
-            //printf("obj uID=%i -> ",w->uUniqueID);
-            if ( w->uUniqueID == tConnect->uUniqueID ) {
-                if (piPinNum) { *piPinNum = tConnect->uTargetPin; }
-                //printf("cached at %i\n",tConnect->uIndexHint);
-                return tConnect->uIndexHint;
-            }
-        } _endwith;
+    iIndex = IndexFromUID( tConnect->uUniqueID , iIndex );
+    if (iIndex < 0) {
+        if (piPinNum) { *piPinNum = 0; }
+        return -1;
     }
-    //otherwise we search all elements to find its new position
-    //printf("searching elements for matching with UUID: %i\n",tConnect->uUniqueID);
-    for (int i=0 ; i<g_iObjCount; i++ ) {
-        _with( aObject(i) ) {
-            if ( w->uUniqueID == tConnect->uUniqueID ) {
-                tConnect->uIndexHint = i;
-                if (piPinNum) { *piPinNum = tConnect->uTargetPin; }
-                //printf("found at %i\n",i);
-                return i;
-            }
-        } _endwith;
-    }
-    //and at least, if reaches here then it's not found
-    //puts("not found");
-    if (piPinNum) { *piPinNum = 0; }
-    return -1;
+    tConnect->uIndexHint = iIndex;
+    if (piPinNum) { *piPinNum = tConnect->uTargetPin; }
+    return iIndex;
 }
 
 // diagram window procedure, handles all messages for the diagram control
@@ -315,6 +310,21 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return FALSE;
     }
     // ------------- Diagram functions -------------
+    ConnectorStruct* ConnectorFromIndex( int iObjIdx , int iConIdx , int* piCount /* =0 */ ) {
+        _const ptOrder = g_ptOrder;
+        _with( aObject( iObjIdx ).tConnector ) {
+            if (!w->uConnector) { //no connectors
+                if (piCount) { *piCount = 0; }
+                return NULL;
+            }
+            if (w->uOneConnector) {
+                if (piCount) { *piCount = 1; }
+                return w;
+            }
+            if (piCount) { *piCount = w->uListSize; }
+            return g_pListConnectors[w->uListID]+iConIdx;
+        } _endwith
+    }
     int GetPinType( DiagramObjectStruct* pObject , int iPinNum ) {
         _with( *pObject ) {
             int iPinCnt = g_ClassInterface[w->iClassID].bInPins;
@@ -856,7 +866,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if (iID >= 0) pbUsage[iID/8] &= ~(1<<(iID%8));
     }
 
-    int InsertObject( int iPosX , int iPosY , int iClassID ) {
+    int InsertObject( int iPosX , int iPosY , int iClassID , bool bNamed /* = 1 */ ) {
         _const ptOrder = g_ptOrder;
         //increase storage if needed
         if (g_iObjCount >= g_iObjMaxCount) {
@@ -888,19 +898,36 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             w->iX = _Pix2Grid(iPosX); w->iW = _Pix2Grid(80);
             w->iY = _Pix2Grid(iPosY); w->iH = _Pix2Grid(36);
             w->uUniqueID = ObtainUniqueID(g_pbUsedIDs);
-            w->iClassID = iClassID;
+            w->iClassID = iClassID; w->zZero = 0;
             w->tConnector.uConnector = 0;
-            sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
-            _with( aObject_Content(iNew,ClsStringStruct) ) {
-                w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
-            } _endwith;
-            if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
-            if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            if (bNamed) {
+                sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
+                _with( aObject_Content(iNew,ClsStringStruct) ) {
+                    w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
+                } _endwith;
+                if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+                if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            }
         } _endwith;
         g_iObjCount++; iObjTotal++;
         iSelectedIndex = iNew; iSelIndexConn=-1;
-        SetUpdate();
+        if (bNamed) { SetUpdate(); }
         return iNew;
+    }
+    int CloneObject( int iPosX , int iPosY , DiagramObjectStruct* pTemplateObj ) {
+        _const ptOrder = g_ptOrder;
+        int iIDX = InsertObject( iPosX , iPosY , pTemplateObj->iClassID , true /* named */ );
+        _with(aObject( iIDX )) {
+            w->iW = pTemplateObj->iW ; w->iH = pTemplateObj->iH;
+            //strcpy( w->zName , pTemplateObj->zName );
+            if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iIDX ; ScrollUpdate( hwnd , -1 , - 1 ); }
+            if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iIDX ; ScrollUpdate( hwnd , -1 , - 1 ); }
+        } _endwith
+        DiagramObjectStruct** ppObj = ptOrder+iIDX;
+        g_ClassInterface[(*ppObj)->iClassID].pfHandlerProc( pTemplateObj->Content , NULL ,  CM_DupContent , 0 , (LPARAM)ppObj );
+        SetUpdate();
+        return iIDX;
+
     }
     int RemoveObject( int iIndex ) {
         _const ptOrder = g_ptOrder;
@@ -1580,7 +1607,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             hSmallFont = GetStockObject( SYSTEM_FONT );
             hbBack = CreateSolidBrush( cBack );
             hbBackGrid = CreateHatchBrush( HS_CROSS , cGrid );
-            hpConSelected = CreatePen( PS_SOLID , 4 , cConSelected );
+            hpConSelected = CreatePen( PS_SOLID , 6 , cConSelected );
             hpSelected = CreatePen( PS_SOLID , 2 , cSelected );
             hpConnectingBad  = CreatePen( PS_DOT , 0 , cConnectingBad );
             hpConnectingGood = CreatePen( PS_DOT , 0 , cConnectingGood );
@@ -1632,7 +1659,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         MessageBox( hwnd , "No class selected" , "Error" , MB_ICONINFORMATION );
                         return 0;
                     }
-                    InsertObject( iViewX+iMouseX , iViewY+iMouseY , iClassToAdd );
+                    InsertObject( iViewX+iMouseX , iViewY+iMouseY , iClassToAdd , true /* named */ );
                     break;
                 }
                 case VK_DELETE: {
@@ -1667,37 +1694,63 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             } //switch
             return 0;
         }
+        case WM_CHAR: {            //Ascii from key combination
+            switch (wParam) {
+                case 'C'-'@' : SendMessage( hwnd , WM_COPY , 0,0 ) ; break;
+                case 'V'-'@' : SendMessage( hwnd , WM_PASTE , 0,0 ) ; break;
+                case 'X'-'@' : SendMessage( hwnd , WM_CUT , 0,0 ) ; break;
+            }
+            break;
+        }
         case WM_LBUTTONDOWN: {     //Button pressed
             SetFocus(hwnd);
-            int iOldSel = iSelectedIndex; iSelectedIndex = -1;
-            iSelIndexConn = -1; bConnectingPin = 0;
+            int iEditConnect = (iSelIndexConn >= 0 && bHoverPin);
+            int iOldSel = iSelectedIndex;
+
             static uint32_t iPrevTime=0;
             uint32_t iElapsed = GetMessageTime(); //printf("%i\n",iElapsed);
             iElapsed -= iPrevTime; iPrevTime = GetMessageTime();
-            //printf("%i to %i\n",iStartIdx,iEndIdx);
-            const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) }; RECT tRc;
-            if ( (iSelectedIndex = ObjectFromPoint( pt , &tRc )) >= 0 ) {
-                if (bLastSizeSide) {
-                    bResizing = bLastSizeSide; SetCapture(hwnd);
-                    SetUpdate(); return 0;
-                }
-                _with( aObject(iSelectedIndex) ) {
-                    if (iOldSel != iSelectedIndex) {
-                        printf("Selected %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                    } else {
-                        if (iElapsed<300) {
-                            iPrevTime -= 300;
-                            printf("Editing %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                            BeginEndEdit( iSelectedIndex , &tRc );
-                            }
-                        //return 0;
+
+            if (!iEditConnect) {
+                iSelectedIndex = -1;
+                iSelIndexConn = -1; bConnectingPin = 0;
+                //printf("%i to %i\n",iStartIdx,iEndIdx);
+                const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) }; RECT tRc;
+                if ( (iSelectedIndex = ObjectFromPoint( pt , &tRc )) >= 0 ) {
+                    if (bLastSizeSide) {
+                        bResizing = bLastSizeSide; SetCapture(hwnd);
+                        SetUpdate(); return 0;
                     }
-                } _endwith;
+                    _with( aObject(iSelectedIndex) ) {
+                        if (iOldSel != iSelectedIndex) {
+                            printf("Selected %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                        } else {
+                            if (iElapsed<300) {
+                                iPrevTime -= 300;
+                                printf("Editing %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
+                                BeginEndEdit( iSelectedIndex , &tRc );
+                                }
+                            //return 0;
+                        }
+                    } _endwith;
+                }
+                if (iOldSel != iSelectedIndex) { SetUpdate(); }
             }
-            if (iOldSel != iSelectedIndex) { SetUpdate(); }
 
             //for connection creation dragging
             if (bHoverPin) {
+                if (iEditConnect) {
+                    _const pCon = ConnectorFromIndex( iSelectedIndex , iSelIndexConn , NULL );
+                    if (iSelectedIndex == iHoverIndex ) {
+                        iHoverIndex = iSelectedIndex = IndexFromUID( pCon->uUniqueID , pCon->uIndexHint );
+                        bHoverPin = pCon->uTargetPin;
+                    } else {
+                        iSelectedIndex = iHoverIndex;
+                        bHoverPin = pCon->uSourcePin;
+                    }
+                    RemoveConnection( iSelectedIndex , iSelIndexConn ); iSelIndexConn = -1;
+                    SetUpdate();
+                }
                 StartConnectingPin( iHoverIndex, bHoverPin );
                 //SetCapture( hwnd );
                 return 0;
@@ -1724,6 +1777,25 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_SETFOCUS: {        //Got Focus
           SetUpdate();
           return 0;
+        }
+        case WM_COPY: {            //Copy selected object
+            if (iSelectedIndex <0 || iSelIndexConn>=0) break;
+            char zBuff[16], iLen=sprintf( zBuff, "{Orca|%04X}", aObject(iSelectedIndex). uUniqueID );
+            SetClipboard(zBuff,iLen); puts("Copied to clipboard");
+            break;
+        }
+        case WM_PASTE: {           //Clone copied object as new object
+            int iLen=16, iIndex; char zBuff[16];
+            GetClipboard( zBuff , &iLen );
+            if ( (iLen != 11) || zBuff[10] != '}' || memcmp(zBuff,"{Orca|",6)) { puts("Not an object"); break; }
+            sscanf( zBuff+6 , "%04X" , &iIndex);
+            iIndex = IndexFromUID( iIndex , -1 );
+            if (iIndex < 0) {
+                MessageBox( hwnd, "Can't paste... Object no longer exists" , NULL , MB_ICONEXCLAMATION );
+                break;
+            }
+            CloneObject( iViewX+iMouseX , iViewY+iMouseY , &aObject(iIndex) );
+            break;
         }
         case WM_COMMAND: {         //Notification/Command from edit control
             int iID = LOWORD(wParam);         // control ID

@@ -32,6 +32,7 @@ typedef enum { //Handler for all object classes
     CM_BeginEdit,           //Start editing the object "display" property
     CM_CancelEdit,          //Cancel editing any property
     CM_EndEdit,             //End editing any propert (update internal data)
+    CM_DupContent,          //Duplicate content of one object into another
 } ClassHandlerCommand;
 
 #define _DeclAsArray( _Group , _xClassx , _Name , _Color , _In , _Out , _Exec , _Template , _Flags ) \
