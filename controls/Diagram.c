@@ -4,7 +4,7 @@
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
-TODO: change BeginEndEdit to edit the control name based on position clicked
+//TODO: change BeginEndEdit to edit the control name based on position clicked
 
 _const _MaxAllocationGap = 128;
 _const _GridSize = 8;
