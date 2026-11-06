@@ -60,6 +60,10 @@ LRESULT fnClsStringHandler( _ClassPrototype ) {
             case CM_CancelEdit:   { //wParam = hCtlEdit // lParam = (void**)ppObject
                 break; // nothing todo here
             }
+            case CM_InitContent:  { // pObject = pre-allocated content to initialize
+                w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
+                break;
+            }
             case CM_DupContent:   { //lParam = (void*)ppObjectOut
                 void** ppObjectOut = (void**)lParam;
                 int iObjSz = sizeof(*w)+w->iBuffer;

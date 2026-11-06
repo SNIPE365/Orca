@@ -4,7 +4,7 @@
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
-//TODO: clicking on connector highlights it? or edits already from source to target?
+TODO: change BeginEndEdit to edit the control name based on position clicked
 
 _const _MaxAllocationGap = 128;
 _const _GridSize = 8;
@@ -425,7 +425,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         } _endwith
         return iConnCnt+1;
     }
-    int  ActConnectingPin( int iTgtObject, int iTgtPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
+    int ActConnectingPin( int iTgtObject, int iTgtPin , BOOL bAddPin /* = 0 */ ) { //check,add or cancel a connection
         _const ptOrder = g_ptOrder;
         #define _CancelConnection() { if (bAddPin) { puts("Cancelled connecting pin"); bConnectingPin = 0; }; return 0; }
         //printf("Obj=%i Pin=%i Add=%i\n",g_iObject,iPin,bAddPin);
@@ -447,8 +447,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //meaning source/target objects can be swapped? exec pins are callback to function not to pins?
 
         //printf("Adding connection from %i.%i to %i.%i\n", iSrcObject, iSrcPin, iTgtObject, iTgtPin);
-        InsertConnectionPin( iSrcObject , iSrcPin , iTgtObject , iTgtPin );
-        InsertConnectionPin( iTgtObject , iTgtPin , iSrcObject , iSrcPin );
+        _const iConSrc = InsertConnectionPin( iSrcObject , iSrcPin , iTgtObject , iTgtPin )-1;
+        _const iConTgt = InsertConnectionPin( iTgtObject , iTgtPin , iSrcObject , iSrcPin )-1;
+        if (bSrcPinType == pinOutput) { //select connector
+            iSelIndexConn=iConSrc ; iSelectedIndex=iSrcObject;
+        } else {
+            iSelIndexConn=iConTgt ; iSelectedIndex=iTgtObject;
+        }
 
         bConnectingPin = 0; return 1;
         #undef _CancelConnection
@@ -684,6 +689,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //set iEndIdx to iIndex for easy walk later
         iEndIdx = iIndex;
 
+        // render objects and connectors
         for ( iIndex=iStartIdx ; (iIndex < g_iObjCount) ; iIndex++) {
             if (iIndex < (g_iObjCount-1)) {
                 _with( aObject(iIndex+1) ) {
@@ -821,7 +827,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     iTgtType = PinPositionFromObject( iHoverIndex , bHoverPin , &iXX , &iYY );
                     hpConnecting = hpConnectingGood; pbConnectingCursor = IDC_CONNECT;
                 }
-                if (iTgtType > iSrcType) { SWAP(iX,iXX) ; SWAP(iY,iYY) ; }
+                //printf("Tgt Type: %i\r  ",iTgtType);
+                if ((!iTgtType && iSrcType==pinInput) || (iTgtType > iSrcType)) { SWAP(iX,iXX) ; SWAP(iY,iYY) ; }
 
                 _const hOldPen = SelectObject( hdc , hpConnecting );
                 for (int iN=0; iN<3; iN++) {
@@ -902,9 +909,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             w->tConnector.uConnector = 0;
             if (bNamed) {
                 sprintf(w->zName , pClsInfo->pzNameTemplate, iObjTotal+1 );
-                _with( aObject_Content(iNew,ClsStringStruct) ) {
-                    w->iLength = 0; w->iBuffer = 1; w->zContent[0] = 0;
-                } _endwith;
+                // tell object to initialize itself
+                g_ClassInterface[iClassID].pfHandlerProc( w->Content , NULL , CM_InitContent , 0 , 0 );
+                // scroll to view
                 if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW) ; iMaxXIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
                 if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             }
@@ -1084,6 +1091,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return iCachedIndex = -1;
     }
 
+    //begin-end edit of either the parameter of the object, or it's name
     LRESULT CALLBACK CtlEditProc( HWND hwnd , UINT uMsg , WPARAM wParam , LPARAM lParam ) {
         if ((uMsg == WM_KEYDOWN)) {
             int iID=0;
@@ -1345,8 +1353,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 }
                                 //if connecting a pin can't have sizing cursors
                                 //but the cursor for that can vary if the pin connected or not;
-                                if (bLastSizeSide ) {
-                                    //otherwise set the cursor to "resize"
+                                if (bLastSizeSide ) { //otherwise set the cursor to "resize"
                                     static char* const pbSideToCursor[] = {
                                         [rsLeft] = IDC_SIZEWE, [rsRight]  = IDC_SIZEWE,
                                         [rsTop]  = IDC_SIZENS, [rsBottom] = IDC_SIZENS,
@@ -1357,16 +1364,28 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 }
                             }
                         }
-                        //if connecting then the cursor is determined by a delayed check
-                        //but if the hovered object has only one pin then that pin is selected
-                        //TODO: improve this so that if there's more pins then set the first pin based on the side
-                        if (bConnectingPin) {
+
+                        if (bConnectingPin) { //if connecting then the cursor is determined by a delayed check
+                            //                //but if the hovered object has only one pin then that pin is selected
+                            //                //TODO: improve this so that if there's more pins then set the first pin based on the side
                             if ( !bHoverPin ) {
                                 _const iPins = g_ClassInterface[w->iClassID].bInPins +
                                     g_ClassInterface[w->iClassID].bOutPins + g_ClassInterface[w->iClassID].bExecPins;
                                 if (iPins==1) { bHoverPin = 1; }
                             }
                             pbCurCursor = pbConnectingCursor;
+                        }
+                        else { //if not connecrting a pin... but having a connection selected
+                            // //and if hovering the pin from either side of the connection
+                            // //then the cursor is the grab cursor, not the connection cursor
+                            if (iSelIndexConn>=0) {
+                                _const pCon = ConnectorFromIndex( iSelectedIndex , iSelIndexConn , NULL );
+                                _const iTgtIdx = IndexFromUID(pCon->uUniqueID , pCon->uIndexHint);
+                                if (((iHoverIndex == iSelectedIndex) && (bHoverPin == pCon->uSourcePin)) ||
+                                    ((iHoverIndex == iTgtIdx) && (bHoverPin == pCon->uTargetPin)) ) {
+                                    pbCurCursor = IDC_HAND;
+                                }
+                            }
                         }
 
                         if (pbCurCursor) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
@@ -1663,7 +1682,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     break;
                 }
                 case VK_DELETE: {
-                    if (iSelectedIndex >= 0) {
+                    if (iSelectedIndex >= 0 && !bHoverPin) {
                         if (iSelIndexConn >= 0) {
                             RemoveConnection( iSelectedIndex , iSelIndexConn );
                             iSelIndexConn = -1; break;
@@ -1734,22 +1753,27 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         }
                     } _endwith;
                 }
-                if (iOldSel != iSelectedIndex) { SetUpdate(); }
+                if (iOldSel != iSelectedIndex) { SetUpdateAsync(); }
             }
 
-            //for connection creation dragging
-            if (bHoverPin) {
-                if (iEditConnect) {
+            if (bHoverPin) { //for connection creation dragging
+                if (iEditConnect) { //if editing then the start point depends which connector was hovering
                     _const pCon = ConnectorFromIndex( iSelectedIndex , iSelIndexConn , NULL );
-                    if (iSelectedIndex == iHoverIndex ) {
-                        iHoverIndex = iSelectedIndex = IndexFromUID( pCon->uUniqueID , pCon->uIndexHint );
+                    _const iTgtIdx = IndexFromUID( pCon->uUniqueID , pCon->uIndexHint );
+                    _const iSrcIdx = iSelectedIndex;
+                    if (iHoverIndex == iSrcIdx ) {
+                        iHoverIndex = iSelectedIndex = iTgtIdx;
                         bHoverPin = pCon->uTargetPin;
-                    } else {
-                        iSelectedIndex = iHoverIndex;
+                    } else if (iHoverIndex == iTgtIdx ) { //iTgtIdx
+                        iHoverIndex = iSrcIdx;
                         bHoverPin = pCon->uSourcePin;
+                    } else {
+                        iEditConnect = 0;
                     }
-                    RemoveConnection( iSelectedIndex , iSelIndexConn ); iSelIndexConn = -1;
-                    SetUpdate();
+                    if ( iEditConnect) { //remove previous connection to 'edit" it }
+                        RemoveConnection( iSrcIdx , iSelIndexConn ); iSelIndexConn = -1;
+                        SetUpdateAsync();
+                    }
                 }
                 StartConnectingPin( iHoverIndex, bHoverPin );
                 //SetCapture( hwnd );

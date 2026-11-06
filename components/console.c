@@ -36,10 +36,11 @@ LRESULT fnClsStdOutHandler( _ClassPrototype ) {
                 return iLen;
                 #undef emitf
             }
-            case CM_BeginEdit:
+            case CM_BeginEdit:    //Nothing to edit
             case CM_EndEdit:
-                break;
-            case CM_DupContent:
+                break;    //Nothing to edit
+            case CM_DupContent:   //Nothing to duplicate
+            case CM_InitContent:  //Nothing to initialize
             default:
                 break;
         }
