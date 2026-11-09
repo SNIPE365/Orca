@@ -1,4 +1,3 @@
-#include <specstrings.h>
 #define main_module Orca
 
 #define _GNU_SOURCE

@@ -8,6 +8,7 @@ static void defines () { //defines
     #define _with(_var) { _const w = &_var;
     #define _endwith }
     #define _rnd(_N) (rand()%(_N))
+    #define _sizeofm(type, member) sizeof(((type *)0)->member)
 
     #if defined(__STDC_VERSION__) && (__STDC_VERSION__ >= 202000L)
         #define _constexpr( _parms... ) constexpr __auto_type _parms

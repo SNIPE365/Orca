@@ -94,6 +94,21 @@ int IndexFromUID( int UID , int uIndexHint ) {
     }
     return -1;
 }
+int IndexFromName( char* pzName , int uIndexHint ) {
+    _const ptOrder = g_ptOrder;
+    //good hint?
+    if ( uIndexHint >= 0 && uIndexHint < g_iObjCount ) {
+        if (!_stricmp( pzName , aObject(uIndexHint).zName)) return uIndexHint;
+    }
+    //no? then search for it
+    puts("--------------");
+    for (int i=0 ; i<g_iObjCount; i++ ) {
+        printf("'%s' ? '%s'\n",pzName, aObject(i).zName);
+        if (!_stricmp( pzName , aObject(i).zName)) { puts("--------------"); return i; }
+    }
+    return -1;
+}
+
 // retrieve the index and pin number from a connector structure, using a cached index if available
 int IndexAndPinFromConnector( ConnectorStruct* tConnect , int* piPinNum ) {
     _const ptOrder = g_ptOrder;
@@ -115,6 +130,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
     //#define _CTL(_ctlId) g_CTL[_ctlId].hwnd
 
+    typedef enum { // Hover Type
+        htNone    = 0, //no hovering inside an object
+        htContent,     //hovering main content of object
+        htLabel,       //hovering label of object
+        htPin,         //hovering pin of object
+        htSize         //hovering size border of object
+    } HoverType;
     typedef enum { //resize sides
         rsNone   = 0,
         rsTop    = 1,
@@ -146,6 +168,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iMaxXIdx=-1 , iMaxYIdx=-1;           //indexes for the objects that have the maximum position (cache)
     static int iStartIdx=0, iEndIdx=-1;             //start/end indexes for drawn objects (cache)
     static int iSelectedIndex=-1,iHoverIndex=-1;    //current selected index // hovered index
+    static int iPrevHoverIndex=-1;
     static char iSelIndexConn=-1;                   //if selection is a connection
     static int iMouseX=0,iMouseY=0;                 //last mouse position (pixels)
     static int iFontSize=0;
@@ -154,6 +177,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static char bDragging=0, *pbCurCursor = NULL;    //0=no drag, 1=drag may start, 2=dragging // current cursor
     static RECT tResizeCancelRc;                     //original rectangle of the resized object
     static char bResizing=0, bLastSizeSide=0;        //0=no resize, n=resize side // current cursor
+    static char bHoverType=0, bPrevHoverType=0;      //which type of hovering is happening in an object
     static char bHoverPin=0, bPrevPin=0;             //last/previous pin state (for pin highlighting)
     static char bConnectingPin=0;                    //selected pin number when adding a connection
     static char bConnectingPinType=0;                //selected pin type when adding a connection
@@ -162,6 +186,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static DiagramFileStruct* pDiagram = NULL;
     static ConnectorStruct **g_pListConnectors = NULL;                     //array of lists for connectors
     static int g_iListConnectorsCount = 0, g_iListConnectorsMaxCount = 0;  //count max size of those lists
+    static char bEditType = 0;
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
     static void* hwndOrgProc = NULL;
     static int iClassToAdd = -1;
@@ -769,7 +794,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 }
 
                 int iWid=tObjRc.right-tObjRc.left, iHei=tObjRc.bottom-tObjRc.top;
-                int iBorderUD = (iHei)/4; tObjRc.bottom -= 4;
+                const int iBorderUD = (iHei)/4;
+                const int iBorderLR = iFontSize/2;
+                tObjRc.bottom -= 4;
                 SelectObject( hDcBuffer , hSmallFont );
                 DrawText( hdc , w->zName , -1 , &tObjRc , DT_SINGLELINE | DT_CENTER | DT_BOTTOM | DT_NOPREFIX );
                 SelectObject( hDcBuffer , hSmallFontB );
@@ -804,6 +831,18 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 }
                 SetTextAlign( hDcBuffer , TA_LEFT );
                 SetTextColor( hDcBuffer , RGB( 0 , 0 , 0 ) );
+
+                if (iHoverIndex == iIndex) {
+                    switch (bHoverType) {
+                        case htNone: break;
+                        case htLabel:
+                            RECT tRc = {
+                                .left = tObjRc.left+iBorderLR , .top = tObjRc.bottom-(iFontSize-5),
+                                .right = tObjRc.right-iBorderLR , .bottom = tObjRc.bottom+1
+                            };
+                            DrawFocusRect( hDcBuffer , &tRc );
+                    }
+                }
 
                 //tell object to draw itself
                 tObjRc.top    += (iBorderUD) ; tObjRc.bottom -= (iBorderUD-4);
@@ -1104,35 +1143,82 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         return CallWindowProc( hwndOrgProc , hwnd , uMsg , wParam , lParam );
     }
-    void BeginEndEdit( int iIndex /* =0 */ , const RECT* pRC /* = NULL */ ) {
+    void BeginEndEdit( int iIndex /* =0 */ , char bType , const RECT* pRC /* = NULL */ ) {
+        _const ptOrder = g_ptOrder;
         if (pRC && !hwndEdit) {
-            const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
-            int cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
-            int iTop, iBottom;
-            if ((iHei+(iBorderUD/4)) > iFontSize*5) {
-                iTop = (pRC->top+2)+iBorderUD; iBottom = pRC->bottom-(iBorderUD+2);
-                cStyle |= ES_MULTILINE | ES_AUTOVSCROLL;
-            } else {
-                iTop = pRC->top+((iHei-iFontSize)/2); iBottom = iTop + iFontSize+2;
+            HFONT hFont = 0;
+            switch (bType) {
+                case htContent: { // start/end edit content of object
+                    const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
+                    int cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
+                    int iTop, iBottom;
+                    if ((iHei+(iBorderUD/4)) > iFontSize*5) {
+                        iTop = (pRC->top+2)+iBorderUD; iBottom = pRC->bottom-(iBorderUD+2);
+                        cStyle |= ES_MULTILINE | ES_AUTOVSCROLL;
+                    } else {
+                        iTop = pRC->top+((iHei-iFontSize)/2); iBottom = iTop + iFontSize+2;
+                    }
+                    _with( *pRC ) {
+                        hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
+                    } _endwith;
+                    //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
+                    LPARAM const tClick = GetMessagePos(); ppEditObj = g_ptOrder+iIndex;
+                    //DiagramObjectStruct* pTemp = *ppEditObj; printf("%p = %p\n",pTemp->Content, w->Content);
+                    const _auto bProceed = g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
+                    if (!bProceed) { DestroyWindow( hwndEdit ); hwndEdit = NULL ; ppEditObj = NULL; return; }
+                    hFont = hCtlFont; break;
+                }
+                case htLabel: { // start/end edit label of object
+                    const int iBorderLR = iFontSize/2;
+                    const int iLeft=pRC->left+4+iBorderLR , iRight = pRC->right-(4+iBorderLR);
+                    const int iTop = pRC->bottom-(iFontSize+8), iBottom = pRC->bottom-8;
+                    const int iWid=iRight-iLeft, iHei=iBottom-iTop, iBorderUD = (iHei)/4;
+                    const int cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_CENTER;
+                    const char *pzName = aObject( iIndex ).zName;
+                    _with( *pRC ) {
+                        hwndEdit = CreateWindowEx( 0 , "EDIT" , pzName , cStyle , iLeft, iTop, iWid, iHei , hwnd , NULL , NULL , NULL );
+                    } _endwith;
+                    _const iLimit = _sizeofm( DiagramObjectStruct , zName );
+                    SendMessage( hwndEdit , EM_SETSEL , 255  , -1 );
+                    SendMessage( hwndEdit , EM_SETLIMITTEXT , iLimit , 0 );
+                    hFont = hSmallFont; ppEditObj = g_ptOrder+iIndex;
+                    break;
+                }
+                default:
+                    printf("StartEdit: Bad Edit type %i\n",bType); return;
             }
-            _with( *pRC ) {
-                hwndEdit = CreateWindowEx( 0 , "EDIT" , NULL , cStyle , pRC->left+4, iTop, iWid-8, iBottom-iTop , hwnd , NULL , NULL , NULL );
-            } _endwith;
-            //CM_BeginEdit: { //wParam = hCtlEdit // lParam = (POINTS)tClick
-            LPARAM const tClick = GetMessagePos(); ppEditObj = g_ptOrder+iIndex;
-            //DiagramObjectStruct* pTemp = *ppEditObj; printf("%p = %p\n",pTemp->Content, w->Content);
-            const _auto bProceed = g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL , CM_BeginEdit , (WPARAM)hwndEdit , (LPARAM)tClick );
-            if (!bProceed) { DestroyWindow( hwndEdit ); hwndEdit = NULL ; ppEditObj = NULL; return; }
+            bEditType = bType;
             hwndOrgProc = (void*)SetWindowLongPtr( hwndEdit , GWLP_WNDPROC , (LONG_PTR)CtlEditProc );
-            SendMessage( hwndEdit , WM_SETFONT , (WPARAM)hCtlFont , 0);
+            SendMessage( hwndEdit , WM_SETFONT , (WPARAM)hFont , 0);
             ShowWindow( hwndEdit , SW_SHOW ); SetFocus( hwndEdit );
         } else {
-            if (hwndEdit) {
-                int iEndOrCancel = iIndex ? CM_CancelEdit : CM_EndEdit;
-                g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL ,  iEndOrCancel , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
-                HWND hwndTemp = hwndEdit; hwndEdit = NULL ; ppEditObj = NULL;
-                DestroyWindow( hwndTemp ); SetUpdate();
+            if (!hwndEdit) { return; }
+            switch (bEditType) {
+                case htContent: {
+                    int iEndOrCancel = iIndex ? CM_CancelEdit : CM_EndEdit;
+                    g_ClassInterface[(*ppEditObj)->iClassID].pfHandlerProc( (*ppEditObj)->Content , NULL ,  iEndOrCancel , (WPARAM)hwndEdit , (LPARAM)ppEditObj );
+                    break;
+                }
+                case htLabel: {
+                    if (iIndex) { break; }
+                    _const iLimit = _sizeofm( DiagramObjectStruct , zName );
+                    char zNewName[iLimit+1];
+                    GetWindowText( hwndEdit , zNewName , iLimit+1 );
+                    int iIdx = IndexFromName( zNewName , -1 );
+                    if ( *ppEditObj == g_ptOrder[iIdx] ) { break; }
+                    if ( iIdx >= 0 ) {
+                        HWND hwndTemp = hwndEdit; hwndEdit = NULL;
+                        MessageBox( hwnd , "Object name duplicated!",NULL,MB_ICONWARNING );
+                        hwndEdit = hwndTemp; SetFocus( hwndEdit ); return;
+                    }
+                    strcpy( (*ppEditObj)->zName , zNewName );
+                    break;
+                }
+                default:
+                    printf("EndEdit: Bad Edit: %i\n",bEditType);
             }
+            HWND hwndTemp = hwndEdit; hwndEdit = NULL; bEditType = 0; ppEditObj = NULL;
+            DestroyWindow( hwndTemp ); SetUpdate();
         }
     }
 
@@ -1303,7 +1389,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_SETCURSOR: {
             //keep resizing cursor active while resizing
             if (bResizing) { SetCursor( LoadCursor( NULL , pbCurCursor ) ); return 0; }
-            pbCurCursor = 0; bLastSizeSide = rsNone; bHoverPin = 0; //reset cursor
+            pbCurCursor = 0; bLastSizeSide = rsNone; bHoverPin = 0; bHoverType = 0; //reset cursor
             //if dragging show moving cursor
             if (bDragging>1) { SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) ); return 0; }
             //if not check if hovering over a visible object
@@ -1362,6 +1448,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                     };
                                     pbCurCursor = pbSideToCursor[bLastSizeSide];
                                 }
+                            } else { //hovering the element, will edit content or name?
+                                bHoverType = (pt.y > (tRc.bottom-(iFontSize-4))) ? htLabel : htContent;
                             }
                         }
 
@@ -1403,11 +1491,16 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             if (bConnectingPin) {
                 Diagram_WndProc( hwnd , WM_SETCURSOR , HTCLIENT, lParam );
-                SetUpdate();
+                SetUpdateAsync();
             }
             if (bHoverPin != bPrevPin) {
                 //printf("idx=%i pin=%i\n",iHoverIndex,bHoverPin);
-                bPrevPin = bHoverPin; SetUpdate();
+                bPrevPin = bHoverPin; SetUpdateAsync();
+            }
+
+            if ((bHoverType != bPrevHoverType) || (iHoverIndex != iPrevHoverIndex)) {
+                bPrevHoverType = bHoverType ; iPrevHoverIndex = iHoverIndex;
+                SetUpdateAsync();
             }
 
             //if resizing, check sides and adjust new size
@@ -1746,9 +1839,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         } else {
                             if (iElapsed<300) {
                                 iPrevTime -= 300;
-                                printf("Editing %i at %i,%i\n",iSelectedIndex,w->iX,w->iY);
-                                BeginEndEdit( iSelectedIndex , &tRc );
-                                }
+                                BeginEndEdit( iSelectedIndex , bHoverType , &tRc );
+                            }
                             //return 0;
                         }
                     } _endwith;
@@ -1828,7 +1920,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (hwndEdit && hCtl==hwndEdit) {
                 if (iCode == EN_KILLFOCUS) {
                     //printf("ID=%i, code=%i\n",iID,iCode);
-                    BeginEndEdit(iID,NULL);
+                    BeginEndEdit(iID,0,NULL);
                 }
             }
             return 0;
