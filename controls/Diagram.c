@@ -1135,7 +1135,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         if ((uMsg == WM_KEYDOWN)) {
             int iID=0;
             if (wParam == VK_ESCAPE) { iID=1 ; wParam=VK_RETURN; }
-            if (wParam == VK_RETURN) {
+            if (wParam == VK_RETURN && (!(GetKeyState(VK_CONTROL)>>15))) {
                 if (GetKeyState( VK_CONTROL ) >= 0) {
                 return SendMessage( GetParent( hwnd ) , WM_COMMAND , MAKEWPARAM(iID,EN_KILLFOCUS) , (LPARAM)hwnd );
                 }
@@ -1152,7 +1152,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     const int iWid=pRC->right-pRC->left, iHei=pRC->bottom-pRC->top, iBorderUD = (iHei)/4;
                     int cStyle = WS_CHILD | WS_BORDER | ES_AUTOHSCROLL | ES_WANTRETURN;
                     int iTop, iBottom;
-                    if ((iHei+(iBorderUD/4)) > iFontSize*5) {
+                    if (1) { //((iHei+(iBorderUD/4)) > iFontSize*5) {
                         iTop = (pRC->top+2)+iBorderUD; iBottom = pRC->bottom-(iBorderUD+2);
                         cStyle |= ES_MULTILINE | ES_AUTOVSCROLL;
                     } else {
