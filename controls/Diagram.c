@@ -1085,6 +1085,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         //grab end of X,Y to check if it was at limit of view area
         int iXX,iYY;
         _with( aObject(iIndex) ) {
+            SelRemove( w->uUniqueID );
             iXX = _Grid2Pix(w->iX + w->iW);
             iYY = _Grid2Pix(w->iY + w->iH);
             w->iW = 0;
@@ -1878,7 +1879,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         return 0;
                     }
                     if (iClassToAdd < 1) {
-                        MessageBox( hwnd , "No class selected" , "Error" , MB_ICONINFORMATION );
+                        //MessageBox( hwnd , "No class selected" , "Error" , MB_ICONINFORMATION );
+                        MessageBeep(MB_ICONINFORMATION);
                         return 0;
                     }
                     InsertObject( iViewX+iMouseX , iViewY+iMouseY , iClassToAdd , true /* named */ );
