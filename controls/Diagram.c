@@ -200,11 +200,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     #include "../components/_basedecl.h"
 
     #define ForEachPopupMenuEntry( __Entry , __SubMenu , __EndSubMenu , __Separator ) \
-        __Entry( pmeCopy        , "&Copy"   "\tCtrl+C"          ,         ,  , NULL   ) \
-        __Entry( pmeRemove      , "&Remove" "\tDelete"          ,         ,  , NULL   ) \
-        __Entry( pmeShow        , "&Select in list" "\tInsert"  ,         ,  , NULL   ) \
-        __Entry( pmeEditLabel   , "Edit &Label"                 ,         ,  , NULL   ) \
-        __Entry( pmeEditContent , "&Edit &Content"              ,         ,  , NULL   )
+        __Entry( pmeCopy        , "&Copy"   "\tCtrl+C"                    ,         ,  , NULL   ) \
+        __Entry( pmeRemove      , "&Delete" "\tDelete"                    ,         ,  , NULL   ) \
+        __Entry( pmeShow        , "&Locate In Blocks Palette" "\tInsert"  ,         ,  , NULL   ) \
+        __Entry( pmeEditLabel   , "Edit &Label"                           ,         ,  , NULL   ) \
+        __Entry( pmeEditContent , "&Edit &Content"                        ,         ,  , NULL   )
     //-------------------------------------------------------------------------------------------
     #define EnumEntry( _Name , _p... ) _Name,
     #define MayEnumEntry( _p... ) EnumEntry(_p)

@@ -76,6 +76,6 @@ LRESULT tvSelectItem(int iID, HTREEITEM hItem) {
 inline LRESULT ctlParentCommand(int iID, int iCode) {
     return SendMessage( GetParent(_CTL(iID)), WM_COMMAND, MAKEWPARAM(iID,iCode), (LPARAM)_CTL(iID));
 }
-inline LRESULT ctlParentCommandPost(int iID, int iCode) {
+LRESULT ctlParentCommandPost(int iID, int iCode) {
     return PostMessage( GetParent(_CTL(iID)), WM_COMMAND, MAKEWPARAM(iID,iCode), (LPARAM)_CTL(iID));
 }
