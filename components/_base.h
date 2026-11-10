@@ -2,12 +2,18 @@
 
 //all of the built-in classes have their metadata defined here
 
+typedef enum {
+    cfNone = 0,
+    cfCanEdit = 1,
+    cfAll = -1
+} ClassFlags;
+
 #define _ForEachBuiltinClassID( _Do ) \
     /*                                                              {   Pins   } */\
     /*   ClassGroup      Class        Name                Color     In Out Exec  Template     Flags */\
-    _Do( cgrpInvalid   , ClsInvalid , "Invalid"         , 0xFF00FF , 0 , 0 , 0 , "BadBad"      , 0 ) \
-    _Do( cgrpContainer , ClsString  , "String"          , 0xFF8844 , 0 , 1 , 0 , "MyString%i"  , 0 ) \
-    _Do( cgrpDevice    , ClsStdOut  , "Standard Output" , 0x55FF55 , 1 , 0 , 0 , "StdOut"      , 0 )
+    _Do( cgrpInvalid   , ClsInvalid , "Invalid"         , 0xFF00FF , 0 , 0 , 0 , "BadBad"      , cfNone ) \
+    _Do( cgrpContainer , ClsString  , "String"          , 0xFF8844 , 0 , 1 , 0 , "MyString%i"  , cfCanEdit ) \
+    _Do( cgrpDevice    , ClsStdOut  , "Standard Output" , 0x55FF55 , 1 , 0 , 0 , "StdOut"      , cfNone )
 
 //Object class is actual component (some built-in, and others added dynamically
 //but the non built-in ones are added dynamically and indexed for fast lookup

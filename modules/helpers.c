@@ -294,3 +294,6 @@ char* GetClipboard( char *pzOutBuff , int *piInOutSize ) {
     if( piInOutSize ) *piInOutSize = 0;
     return NULL;
 }
+
+static void* menu_AddSubMenu( void* hMenu , char* pzText , int iID /* = 0 */ );
+static int menu_MenuAddEntry( void* hMenu , int iID /* = 0 */ , char* pzText /* = NULL */ , int iModifiers /* = 0 */ , int iAccelerator /* = 0 */ , void* pEvent /* = NULL */ , int bState /* = 0 */ );

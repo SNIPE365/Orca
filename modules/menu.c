@@ -44,7 +44,6 @@
       __Entry( meCode_Clear   , "Cl&ear output"      , _Ctrl+_Shift , VK(_B) , &Code_ClearOutput ) \
    __EndSubMenu()*/
 //-------------------------------------------------------------------------------------------
-
 #if 1 //key definitions
     #define _Shift FSHIFT
     #define _Ctrl  FCONTROL
@@ -81,11 +80,11 @@
 #define EnumEntry( _Name , _p... ) _Name,
 #define MayEnumEntry( _p... ) EnumEntry(_p)
 #define MayEnumSubMenu( _s , _name... ) _name
-    typedef enum {
+typedef enum {
     meFirst = 1000,
     ForEachMenuEntry( MayEnumEntry , MayEnumSubMenu , Dummy , Dummy )
     meLast
-    } MenuEntries;
+} MenuEntries;
 #undef EnumEntry
 #undef MayEnumEntry
 #undef MayEnumSubMenu
