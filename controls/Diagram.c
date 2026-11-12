@@ -5,7 +5,7 @@
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
 //TODO: drag multiple selected objects
-//TODO: make popup menu functional
+//TODO: evaluate bug regarding connection to two different stdout's
 
 _const _MaxAllocationGap = 128;
 _const _GridSize = 8;
@@ -38,7 +38,13 @@ typedef struct {
     int16_t  iY;                //+ 2= 6 // Y position of the object (in grid units)
     int16_t  iX;                //+ 2= 8 // X position of the object (in grid units)
     uint8_t  iW,iH;             //+ 2= 10 // Width and height of the object (grid units)
-    uint8_t  bFlags, bResv;     //+ 2= 12 // Flags and reserved byte of the object
+    union {                     //+ 1= 11 // Flags for the object
+        struct {
+            uint8_t bSelected:1;
+        };
+        uint8_t bFlags;
+    };
+    uint8_t  bResv;             //+ 1= 12 // reserved byte (padding)
     ConnectorStruct tConnector; //+ 4= 16 // Connectors (if .uTargetPin is 0, but .uConnector is not 0)
     //                                       then .uIndexHint points to a list of connectors and
     //                                       .uUniqueID is how many connectors are there
@@ -56,6 +62,11 @@ typedef struct {
     int iViewX, iViewY; //in pixels
     int iSelectedIdx, iSelIndexConn;
 } DiagramFileStruct;
+typedef struct {
+    uint16_t uIndex;
+    uint16_t uUniqueID;
+    int32_t X,Y,iNewX,iNewY;
+} IndexHintStruct;
 DiagramFileStruct* g_ProjectFiles[256]; int g_ProjectFileCount = 0;
 
 typedef enum { //Diagram custom messages
@@ -174,7 +185,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static int iMouseX=0,iMouseY=0;                 //last mouse position (pixels)
     static int iFontSize=0;
     static int iDragStartX,iDragStartY;              //position where drag started (if dragging) (pixels)
-    static int iDragCancelX,iDragCancelY;            //original position of dragged element (if dragging) (pixels)
     static char bDragging=0, *pbCurCursor = NULL;    //0=no drag, 1=drag may start, 2=dragging // current cursor
     static RECT tResizeCancelRc;                     //original rectangle of the resized object
     static char bResizing=0, bLastSizeSide=0;        //0=no resize, n=resize side // current cursor
@@ -191,14 +201,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static HWND hwndEdit = NULL; static DiagramObjectStruct** ppEditObj = NULL;
     static void* hwndOrgProc = NULL;
     static int iClassToAdd = -1;
-    static int g_iExtSelCount = 0;
-    static uint8_t g_bSelectedUIDs[16384/8];
+    static int g_iExtSelCount = 0; static IndexHintStruct* pTempSelList;
     static HMENU g_PopupMenu = 0;
 
     static const int cBlkBrd = 4;
 
     #include "../components/_basedecl.h"
-
     #define ForEachPopupMenuEntry( __Entry , __SubMenu , __EndSubMenu , __Separator ) \
         __Entry( pmeCopy        , "&Copy"   "\tCtrl+C"                    ,         ,  , NULL   ) \
         __Entry( pmeRemove      , "&Delete" "\tDelete"                    ,         ,  , NULL   ) \
@@ -233,7 +241,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
 
         _auto hMenu = CreatePopupMenu() ; g_PopupMenu = hMenu;
-
         ForEachPopupMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
 
         #undef _SubMenu
@@ -246,7 +253,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     } //menu_CreateMainMenu()
 
     //-------------------------------------------------------------------------------------------
-
     void SortConnections( DiagramFileStruct *pFile ) {
         DiagramObjectStruct **ptOrder = pFile->pObjects;
         //sort the connection order of this object based on their Y position in the diagram
@@ -344,6 +350,97 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         return 0;
     }
 
+    // --------------- selection functions ---------------------------
+    char SelCheck( int iUID , int iIndexHint ) {   //check if UID is selected
+        _const ptOrder = g_ptOrder;
+        if ((iIndexHint = IndexFromUID( iUID , iIndexHint ))<0) { puts("Bad Index, not checking"); return 0; }
+        //printf("Object %i selected = %i\n",iIndexHint,aObject( iIndexHint ).bSelected);
+        return aObject( iIndexHint ).bSelected;
+    }
+    bool SelAdd( int iUID , int iIndexHint ) {     //add to extended selection by UID
+        _const ptOrder = g_ptOrder;
+        //printf("{%i} Already selected (%i total selected)\n",iUID,g_iExtSelCount);
+        if ((iIndexHint = IndexFromUID( iUID , iIndexHint ))<0) { return false; }
+        if ( SelCheck(iUID,iIndexHint) ) { return false; }
+        aObject( iIndexHint ).bSelected = 1;
+        g_iExtSelCount++;
+        //printf("{%i} Added to selection (%i total selected)\n",iUID,g_iExtSelCount);
+        SetUpdateAsync();
+        return true;
+    }
+    bool SelRemove( int iUID , int iIndexHint ) {  //remove from extended selection by UID
+        _const ptOrder = g_ptOrder;
+        if ((iIndexHint = IndexFromUID( iUID , iIndexHint ))<0) { puts("Bad index, not removing") ; return false; }
+        //printf("{%i} not selected (%i total selected)\n",iUID,g_iExtSelCount);
+        if ( !SelCheck(iUID,iIndexHint) ) { return false; }
+        aObject( iIndexHint ).bSelected = 0;
+        g_iExtSelCount--;
+        //printf("{%i} removed from selection (%i total selected)\n",iUID,g_iExtSelCount);
+        SetUpdateAsync();
+        return true;
+    }
+    void SelToggle( int iUID , int iIndexHint ) {  //toggle extended selection by UID
+        _const ptOrder = g_ptOrder;
+        if ((iIndexHint = IndexFromUID( iUID , iIndexHint ))<0) { return; }
+        if ( SelCheck(iUID, iIndexHint) ) {
+            aObject( iIndexHint ).bSelected = 0;
+            g_iExtSelCount--;
+            //printf("{%i} removed from selection (%i total selected)\n",iUID,g_iExtSelCount);
+        } else {
+            aObject( iIndexHint ).bSelected = 1;
+            g_iExtSelCount++;
+            //printf("{%i} Added to selection (%i total selected)\n",iUID,g_iExtSelCount);
+        }
+        SetUpdateAsync();
+    }
+    void SelClear( bool bForced /* = false */ ) {             //clear extended selection
+        _const ptOrder = g_ptOrder;
+        if ( !g_iExtSelCount && iSelectedIndex<0 ) { return; }
+        if (bForced && g_iExtSelCount == 1 && iSelectedIndex >= 0) {
+            SelRemove( aObject(iSelectedIndex).uUniqueID , iSelectedIndex );
+        } else {
+            iSelectedIndex = -1;
+            if (!bForced && g_iExtSelCount == 1) { printf("only %i selected, not clearing...\n",g_iExtSelCount); return; } //do nothing if no extended selection
+        }
+        g_iExtSelCount = 0;
+        //walk trough all objects and clear the selected flag
+        for (int i=0 ; i<g_iObjCount ; i++) {
+            aObject(i).bSelected = 0;
+        }
+        //printf("Selection Cleared\n");
+    }
+    int SelReplaceWithIndex( int iOldIndex , int iNewIndex ) {   //replace standard and extended selection with single selection
+        _const ptOrder = g_ptOrder;
+        bool bForce = (g_iExtSelCount>0 && iOldIndex<0);
+        if ( iOldIndex>=0 && g_iExtSelCount == 1) { SelRemove( aObject(iOldIndex).uUniqueID , iOldIndex ); iOldIndex = -1; }
+        SelClear( bForce );
+        if (iNewIndex < 0) { return iSelectedIndex=-1; }
+        if (iOldIndex >= 0) { SelRemove( aObject(iOldIndex).uUniqueID , iOldIndex ); }
+        SelAdd( aObject( iNewIndex ).uUniqueID , iNewIndex );
+        return iSelectedIndex=iNewIndex;
+    }
+    IndexHintStruct* SelCreateList() { //create a list of pointers for all selected objects
+        _const ptOrder = g_ptOrder;
+        if (g_iExtSelCount < 1) { return NULL; } //should we avoid creation if only 1 selected?
+        //allocate one extra so that last is NULL
+        IndexHintStruct* pTemp = malloc( sizeof(IndexHintStruct)*(g_iExtSelCount+1) );
+        if (!pTemp) { return NULL; }
+        int iSelIdx = 0;
+        for (int i=0 ; i<g_iObjCount ; i++) {
+            if (aObject(i).bSelected) {
+                pTemp[iSelIdx  ].uIndex = i;
+                pTemp[iSelIdx++].uUniqueID = aObject(i).uUniqueID;
+            }
+        }
+        pTemp[iSelIdx].uIndex = -1;
+        pTemp[iSelIdx].uUniqueID = 0;
+        return pTemp;
+    }
+    void SelFreeList( IndexHintStruct* pList ) { //delete a created list
+        if (!pList) { return; }
+        free(pList); pList = 0;
+    }
+
     // ------------- Bezier Evalution functions ------------
     POINT EvaluateCubicBezier(const POINT atBezier[4], float t) {
         float u = 1.0f - t;
@@ -385,6 +482,30 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             prev = current;
         }
         return FALSE;
+    }
+    void DrawBezier( HDC hdc , const POINT *pPoints , int iNumPoints ) {
+
+        /*
+        MoveToEx( hdc , pPoints[0].x , pPoints[0].y , NULL );
+        int iMidY = (pPoints[0].y+pPoints[1].y)/2;
+        LineTo( hdc , pPoints[1].x , iMidY );
+        LineTo( hdc , pPoints[3].x , iMidY );
+        LineTo( hdc , pPoints[3].x , pPoints[3].y );
+        */
+
+        PolyBezier(hdc , pPoints , iNumPoints );
+
+        /*int iMidY = (pPoints[0].y+pPoints[1].y)/2;
+        const POINT aPt[4] = {
+            {pPoints[0].x , pPoints[0].x} ,
+            {pPoints[1].x , iMidY} ,
+            {pPoints[3].x , iMidY} ,
+            { pPoints[3].x , pPoints[3].y }
+        };
+        const BYTE bType[4] = { PT_MOVETO , PT_LINETO , PT_LINETO , PT_LINETO };
+        PolyDraw( hdc , aPt , bType , 4 );
+        PolyBezier( hdc , pPoints , iNumPoints ); */
+
     }
 
     ConnectorStruct* ConnectorFromIndex( int iObjIdx , int iConIdx , int* piCount /* =0 */ ) {
@@ -448,7 +569,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         _const ptOrder = g_ptOrder;
         if (iSrcObject < 0 || iSrcObject >= g_iObjCount) { return; }
         if (!iSrcPin) { return; }
-        iSelectedIndex = iSrcObject; iSelIndexConn=-1; bConnectingPin = iSrcPin;
+        iSelectedIndex = SelReplaceWithIndex( iSelectedIndex , iSrcObject ); iSelIndexConn=-1; bConnectingPin = iSrcPin;
         //printf("Selected pin %i\n",iSrcPin);
         if (!(bConnectingPinType = GetPinType( &aObject(iSrcObject) , iSrcPin ))) { return; }
     }
@@ -528,9 +649,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         _const iConSrc = InsertConnectionPin( iSrcObject , iSrcPin , iTgtObject , iTgtPin )-1;
         _const iConTgt = InsertConnectionPin( iTgtObject , iTgtPin , iSrcObject , iSrcPin )-1;
         if (bSrcPinType == pinOutput) { //select connector
-            iSelIndexConn=iConSrc ; iSelectedIndex=iSrcObject;
+            iSelIndexConn=iConSrc ; iSelectedIndex=SelReplaceWithIndex(iSelectedIndex,iSrcObject);
         } else {
-            iSelIndexConn=iConTgt ; iSelectedIndex=iTgtObject;
+            iSelIndexConn=iConTgt ; iSelectedIndex=SelReplaceWithIndex(iSelectedIndex,iTgtObject);
         }
 
         bConnectingPin = 0; return 1;
@@ -662,7 +783,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         };
                         POINT pt = {iMouseX,iMouseY};
                         if ( HitTestBezierMath( pt , atBezier , _GridSize ) ) {
-                            iSelectedIndex = iIndex; iSelIndexConn = iCon;
+                            iSelectedIndex = SelReplaceWithIndex(iSelectedIndex,iIndex); iSelIndexConn = iCon;
                             printf("Selected connector %i.%i\n",iIndex,iCon);
                             SetUpdate();
                             return;
@@ -674,57 +795,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
 
         iEndIdx=(iIndex < g_iObjCount ? iIndex-1 : g_iObjCount-1);
-    }
-    // --------------- selection functions ---------------------------
-    char SelCheck( int iUID ) {   //check if UID is selected
-        return g_bSelectedUIDs[ iUID/8 ] & (1<<(iUID%8));
-    }
-    bool SelAdd( int iUID ) {     //add to extended selection by UID
-        //printf("{%i} Already selected (%i total selected)\n",iUID,g_iExtSelCount);
-        if ( SelCheck(iUID) ) { return false; }
-        g_bSelectedUIDs[ iUID/8 ] |= (1<<(iUID%8));
-        g_iExtSelCount++;
-        //printf("{%i} Added to selection (%i total selected)\n",iUID,g_iExtSelCount);
-        SetUpdateAsync();
-        return true;
-    }
-    bool SelRemove( int iUID ) {  //remove from extended selection by UID
-        //printf("{%i} not selected (%i total selected)\n",iUID,g_iExtSelCount);
-        if (!SelCheck(iUID)) { return false; }
-        g_bSelectedUIDs[ iUID/8 ] &= ~(1<<(iUID%8));
-        g_iExtSelCount--;
-        //printf("{%i} removed from selection (%i total selected)\n",iUID,g_iExtSelCount);
-        SetUpdateAsync();
-        return true;
-    }
-    void SelToggle( int iUID ) {  //toggle extended selection by UID
-        if ( SelCheck(iUID) ) {
-            g_bSelectedUIDs[ iUID/8 ] &= ~(1<<(iUID%8));
-            g_iExtSelCount--;
-            //printf("{%i} removed from selection (%i total selected)\n",iUID,g_iExtSelCount);
-        } else {
-            g_bSelectedUIDs[ iUID/8 ] |= (1<<(iUID%8));
-            g_iExtSelCount++;
-            //printf("{%i} Added to selection (%i total selected)\n",iUID,g_iExtSelCount);
-        }
-        SetUpdateAsync();
-    }
-    void SelClear() {             //clear extended selection
-        _const ptOrder = g_ptOrder;
-        iSelectedIndex = -1;
-        if (g_iExtSelCount <= 1) { printf("only %i selected, not clearing...\n",g_iExtSelCount); return; } //do nothing if no extended selection
-        g_iExtSelCount = 0;
-        memset( g_bSelectedUIDs , 0 , sizeof(g_bSelectedUIDs) );
-        printf("Selection Cleared\n");
-    }
-    int SelReplaceWithIndex( int iOldIndex , int iNewIndex ) {   //replace standard and extended selection with single selection
-        _const ptOrder = g_ptOrder;
-        if ( g_iExtSelCount == 1) { SelRemove( aObject(iOldIndex).uUniqueID ); iOldIndex = -1; }
-        SelClear();
-        if (iNewIndex < 0) { return -1; }
-        if (iOldIndex >= 0) { SelRemove( aObject(iOldIndex).uUniqueID ); }
-        SelAdd( aObject( iNewIndex ).uUniqueID );
-        return iSelectedIndex=iNewIndex;
     }
     // -------------- drawing functions ------------------
     void ScrollUpdate( HWND hwnd , int nWid , int nHei ) {
@@ -872,10 +942,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                                 {(iX+iXX)/2 , (iY+iYY)/2} ,
                                 {iXX        , iYY}
                             };
-                            PolyBezier( hdc , atBezier , 4 );
+                            DrawBezier( hdc , atBezier , 4 );
                             if (iIndex==iSelectedIndex && iSelIndexConn == iCon) {
                                 SelectObject( hdc , hpSelected );
-                                PolyBezier( hdc , atBezier , 4 );
+                                DrawBezier( hdc , atBezier , 4 );
                             }
                             SelectObject( hdc , hOldPen);
 
@@ -889,7 +959,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
 
                 //border if selected (single select)
-                if ( iSelIndexConn<0 && SelCheck( w->uUniqueID ) ) {
+                if ( iSelIndexConn<0 && SelCheck( w->uUniqueID , iIndex ) ) {
                     _const hOldPen = SelectObject( hdc , g_iExtSelCount > 1 ? hpMultiSelected : hpSelected );
                     _const hOldBrush = SelectObject( hdc , GetStockObject( NULL_BRUSH ) );
                     RoundRect( hdc , tObjRc.left-0 , tObjRc.top-0 , tObjRc.right+0 , tObjRc.bottom+0 , 16 , 16 );
@@ -981,7 +1051,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         {iOX+(iX+iXX)/2 , iOY+(iY+iYY)/2} ,
                         {iOX+iXX        , iOY+iYY}
                     };
-                    PolyBezier( hdc , atBezier , 4 );
+                    DrawBezier( hdc , atBezier , 4 );
                 }
                 SelectObject( hdc , hOldPen );
             }
@@ -1054,8 +1124,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH) ; iMaxYIdx = iNew ; ScrollUpdate( hwnd , -1 , - 1 ); }
             }
         } _endwith;
-        g_iObjCount++; iObjTotal++;
-        iSelectedIndex = iNew; iSelIndexConn=-1;
+        g_iObjCount++; iObjTotal++; iSelIndexConn=-1;
+        iSelectedIndex = SelReplaceWithIndex( iSelectedIndex , iNew );
         if (bNamed) { SetUpdate(); }
         return iNew;
     }
@@ -1079,13 +1149,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         //don't remove if object is being dragged
         if ( iSelectedIndex == iIndex && bDragging ) {
+            if (pTempSelList) { SelFreeList(pTempSelList); pTempSelList = NULL; }
             bDragging = 1 ; SendMessage( hwnd , WM_LBUTTONUP , 0 , 0 );
         }
 
         //grab end of X,Y to check if it was at limit of view area
         int iXX,iYY;
         _with( aObject(iIndex) ) {
-            SelRemove( w->uUniqueID );
+            SelRemove( w->uUniqueID , iIndex );
             iXX = _Grid2Pix(w->iX + w->iW);
             iYY = _Grid2Pix(w->iY + w->iH);
             w->iW = 0;
@@ -1165,8 +1236,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         // don't need to change iSelIndexConn=-1, because it works withing the same principle
         if ( iSelectedIndex == iIndex ) {
-            if ( (iSelectedIndex > 0) ) { iSelectedIndex--; }
-            if ( !g_iObjCount ) { iSelectedIndex = -1; }
+            if ( (iSelectedIndex > 0) ) {  iSelectedIndex = SelReplaceWithIndex( -1 , iSelectedIndex-1 ); }
+            if ( !g_iObjCount ) { SelClear( true ); }
             if (iSelectedIndex >= 0) {
                 _with( aObject(iSelectedIndex) ) {
                     if ( (_Grid2Pix(w->iY)-iViewY) < 0 || (_Grid2Pix(w->iY+w->iH)-iViewY) > iBufHei ) {
@@ -1344,14 +1415,15 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 g_iListConnectorsMaxCount = w->iListConnectorsMaxCount;
                 g_pListConnectors = w->pListConnectors;                 //array of lists for connectors
                 //restore from cached (when it makes sense)
-                iSelectedIndex = w->iSelectedIdx;
-                iSelIndexConn = w->iSelIndexConn;
                 iMaxXIdx = iMaxYIdx = -1;
                 iStartIdx = 0 ; iEndIdx = -1;
                 iViewX = w->iViewX; iViewY = w->iViewY;
                 ScrollUpdate( hwnd , -1 , -1 );
                 tInfo.nPos = iViewX ; SetScrollInfo( hwnd , SB_HORZ , &tInfo , TRUE );
                 tInfo.nPos = iViewY ; SetScrollInfo( hwnd , SB_VERT , &tInfo , TRUE );
+                SelClear(true);
+                iSelectedIndex = SelReplaceWithIndex( -1 , w->iSelectedIdx );
+                iSelIndexConn = w->iSelIndexConn;
                 SetUpdate();
             } _endwith
         }
@@ -1490,7 +1562,29 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
         //#undef aObject_Content
     }
-
+    // ------------- Menu Handling ---------------
+    void HandleMenuAction( int iID ) {
+        _const ptOrder = g_ptOrder;
+        switch (iID) {
+            //case pmeCut:       { SendMessage( hwnd , WM_CUT , 0 , 0 ); break; }
+            case pmeCopy:        { SendMessage( hwnd , WM_COPY , 0 , 0 ); break; }
+                //case pmePaste:       { SendMessage( hwnd , WM_PASTE , 0 , 0 ); break; }
+            case pmeRemove:      { SendMessage( hwnd , WM_KEYDOWN , VK_DELETE , 0 ); break; }
+            case pmeShow:        { SendMessage( hwnd , WM_KEYDOWN , VK_INSERT , 0 ); break; }
+            case pmeEditLabel:
+            case pmeEditContent: { //Edit label or content
+                if (iSelectedIndex < 0) { break; }
+                _with( aObject(iSelectedIndex) ) {
+                    const RECT tRc = {
+                        .left  = (_Grid2Pix(w->iX)-iViewX)-cBlkBrd*2       , .top    = (_Grid2Pix(w->iY)-iViewY)-cBlkBrd*2 ,
+                        .right = (_Grid2Pix(w->iX+w->iW)-iViewX)+cBlkBrd*2 , .bottom = (_Grid2Pix(w->iY+w->iH)-iViewY)+cBlkBrd*2 };
+                    BeginEndEdit( iSelectedIndex , iID==pmeEditLabel?htLabel:htContent , &tRc );
+                } _endwith
+                break;
+            }
+            default:             { printf("%s%i","Unhandled Menu Action: ",iID); break; }
+        }
+    }
     // ------------- Message dispatch --------------
     _const ptOrder = g_ptOrder;
     switch (message) {
@@ -1595,8 +1689,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_MOUSEMOVE: {       //Mouse moved in the control
             iMouseX = (short)LOWORD(lParam);  // horizontal position of cursor
             iMouseY = (short)HIWORD(lParam);  // vertical position of cursor
-            char bMoved = 0;
-            int iNewX,iNewY;
+            char bMoved = 0, bTempSel = 0;
+            //int iNewX,iNewY;
 
             if (bConnectingPin) {
                 Diagram_WndProc( hwnd , WM_SETCURSOR , HTCLIENT, lParam );
@@ -1613,7 +1707,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             }
 
             //if resizing, check sides and adjust new size
-            if (bResizing) {
+            if (bResizing && !bDragging) {
                 _with( aObject(iSelectedIndex) ) {
                     //calculate new position/size (adjusted to grid, for bResizing sides)
                     //if left or top, adjust new position, if right or bottom, adjust new size
@@ -1628,7 +1722,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     if (iH < _BlkMinHei) { if (bResizing & rsTop)  { iT = w->iY+w->iH-_BlkMinHei; } ; iH = _BlkMinHei; }
                     else if (iH > _BlkMaxHei) { if (bResizing & rsTop)  { iT = w->iY+w->iH-_BlkMaxHei; } ; iH = _BlkMaxHei; }
                     if ( (iL != w->iX) || (iT != w->iY) || (iW != w->iW) || (iH != w->iH) ) { //update position/size
-                        if ( (iL != w->iX) || (iT != w->iY) ) { bMoved = 1; iNewX = iL; iNewY = iT; }
+                        if ( (iL != w->iX) || (iT != w->iY) ) {
+                            bMoved = 1; bTempSel = 1; pTempSelList = SelCreateList();
+                            pTempSelList[0].iNewX = iL; pTempSelList[1].iNewY = iT;
+                        }
                         w->iX = iL; w->iY = iT; w->iW = iW; w->iH = iH;
                         SetUpdate();
                     }
@@ -1637,45 +1734,89 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
 
             //check if moved enough to start a drag, to active it and backup initial position
             if ((bDragging==1) && ((abs(iMouseX-iDragStartX)>3) || (abs(iMouseY-iDragStartY)>3))) {
-                iDragCancelX = _Grid2Pix(aObject(iSelectedIndex).iX);
-                iDragCancelY = _Grid2Pix(aObject(iSelectedIndex).iY);
                 bDragging = 2; SetCursor( LoadCursor( NULL , pbCurCursor=IDC_SIZEALL ) );
+                //if more than 1 selected then create a list
+                //puts("Creating list...");
+                pTempSelList = SelCreateList();
+                for ( int i=0 ; pTempSelList[i].uUniqueID ; i++) {
+                    int iIdx = IndexFromUID( pTempSelList[i].uUniqueID , pTempSelList[i].uIndex );
+                    if (iIdx < 0) { puts("!ERROR! SELECTED OBJECT NOT FOUND!"); continue; }
+                    if ( pTempSelList[i].uIndex != iIdx ) { pTempSelList[i].uIndex = iIdx; }
+                    _with( aObject(iIdx) ) {
+                        pTempSelList[i].X = _Grid2Pix(w->iX); pTempSelList[i].Y = _Grid2Pix(w->iY);
+                    } _endwith
+                }
+                //puts("Created list");
             }
             //if dragging move the block aligned to the grid;
             if (bDragging==2) {
-                _with( aObject(iSelectedIndex) ) {
-                    iNewX = _Pix2Grid((iDragCancelX+(iMouseX-iDragStartX))+3);
-                    iNewY = _Pix2Grid((iDragCancelY+(iMouseY-iDragStartY))+3);
-                    if (iNewX<0) { iNewX = 0; }; if (iNewY<0) { iNewY = 0; }
-                    if ((iNewX != w->iX) || (iNewY != w->iY)) {
-                        w->iX = iNewX; w->iY= iNewY; bMoved = 1;
-                        SetUpdate();
-                    } //endif
-                } _endwith;
-            } //endif (bDragging==2)
+                //puts("may move");
+                for ( int i=0 ; pTempSelList[i].uUniqueID ; i++) {
+                    int iIdx = IndexFromUID( pTempSelList[i].uUniqueID , pTempSelList[i].uIndex );
+                    if (iIdx < 0) { puts("!ERROR! SELECTED OBJECT NOT FOUND!"); continue; }
+                    if ( pTempSelList[i].uIndex != iIdx ) { pTempSelList[i].uIndex = iIdx; }
+                    _with( aObject(iIdx) ) {
+                        pTempSelList[i].iNewX = _Pix2Grid(( pTempSelList[i].X+(iMouseX-iDragStartX))+3);
+                        pTempSelList[i].iNewY = _Pix2Grid(( pTempSelList[i].Y+(iMouseY-iDragStartY))+3);
+                        if (pTempSelList[i].iNewX<0) { pTempSelList[i].iNewX = 0; };
+                        if (pTempSelList[i].iNewY<0) { pTempSelList[i].iNewY = 0; }
+                        if ((pTempSelList[i].iNewX != w->iX) || (pTempSelList[i].iNewY != w->iY)) {
+                            w->iX = pTempSelList[i].iNewX; w->iY= pTempSelList[i].iNewY; bMoved = 1;
+                        } //endif
+                    } _endwith;
+                }
+            }
 
-            if (bMoved) { //if moved then may reorder,scroll
-                while (1) { //reorder the dragging object
-                    if (iSelectedIndex < (g_iObjCount-1)) {
-                        const int iNextY = aObject(iSelectedIndex+1).iY;
-                        if ( (iNewY > iNextY) || ((iNewY==iNextY) && (iNewX > aObject(iSelectedIndex+1).iX)) ) {
-                            SWAP( g_ptOrder[iSelectedIndex] , g_ptOrder[iSelectedIndex+1] ); iSelectedIndex++; continue;
+            if (bMoved && pTempSelList) { //if moved then may reorder,scroll
+                //puts("blocks moved... reorder");
+                while (1) {
+                    //RestartSort://reorder the dragging object
+                    bool bSorted = false;
+                    for ( int i=0 ; pTempSelList[i].uUniqueID ; i++) {
+                        //printf("[%i]",i);
+                        int iIdx = IndexFromUID( pTempSelList[i].uUniqueID , pTempSelList[i].uIndex );
+                        if (iIdx < 0) { puts("!ERROR! SELECTED OBJECT NOT FOUND!"); continue; }
+                        if ( pTempSelList[i].uIndex != iIdx ) { pTempSelList[i].uIndex = iIdx; }
+                        if (iIdx < (g_iObjCount-1) && (!aObject(iIdx+1).bSelected)) {
+                            const int iNextY = aObject(iIdx+1).iY;
+                            if ( (pTempSelList[i].iNewY > iNextY) ||
+                                ((pTempSelList[i].iNewY==iNextY) &&
+                                (pTempSelList[i].iNewX > aObject(iIdx+1).iX)) ) {
+                                    SWAP( g_ptOrder[iIdx] , g_ptOrder[iIdx+1] );
+                                    if (iIdx == iSelectedIndex) { iSelectedIndex++; }
+                                    pTempSelList[i].uIndex++; bSorted = true; break; //goto RestartSort;
+                            } //endif
                         } //endif
-                    } //endif
-                    if (iSelectedIndex > 0) {
-                        const int iPrevY = aObject(iSelectedIndex-1).iY;
-                        if ( (iNewY < iPrevY) || ((iNewY==iPrevY) && (iNewX < aObject(iSelectedIndex-1).iX)) ) {
-                            SWAP( g_ptOrder[iSelectedIndex] , g_ptOrder[iSelectedIndex-1] ); iSelectedIndex--; continue;
-                        } //endif
-                    } //endif (iSelectedIndex > 0) {
-                    break;
+                        if (iIdx > 0 && (!aObject(iIdx-1).bSelected)) {
+                            const int iPrevY = aObject(iIdx-1).iY;
+                            if ( (pTempSelList[i].iNewY < iPrevY) ||
+                                ((pTempSelList[i].iNewY==iPrevY) &&
+                                (pTempSelList[i].iNewX < aObject(iIdx-1).iX)) ) {
+                                    SWAP( g_ptOrder[iIdx] , g_ptOrder[iIdx-1] );
+                                    if (iIdx == iSelectedIndex) { iSelectedIndex--; }
+                                    pTempSelList[i].uIndex--; bSorted = true; break; //goto RestartSort;
+                            } //endif
+                        } //endif (iSelectedIndex > 0) {
+                    }
+                    if (!bSorted) { break; }
                 } //wend
-                _with( aObject(iSelectedIndex) ) {
+                //puts("blocks reordered... check maximum");
+                { //scope
                     bool bUpdate=0;
-                    if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW); iMaxXIdx=iSelectedIndex; bUpdate=true; }
-                    if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH); iMaxYIdx=iSelectedIndex; bUpdate=true; }
+                    for ( int i=0 ; pTempSelList[i].uUniqueID ; i++) {
+                        //grab index by subtracting the pointers from the order
+                        int iIdx = IndexFromUID( pTempSelList[i].uUniqueID , pTempSelList[i].uIndex );
+                        if (iIdx < 0) { puts("!ERROR! SELECTED OBJECT NOT FOUND!"); continue; }
+                        _with( aObject(iIdx) ) {
+                            if ( pTempSelList[i].uIndex != iIdx ) { pTempSelList[i].uIndex = iIdx; }
+                            if (_Grid2Pix(w->iX+w->iW) > iMaxX) { iMaxX = _Grid2Pix(w->iX+w->iW); iMaxXIdx=iIdx; bUpdate=true; }
+                            if (_Grid2Pix(w->iY+w->iH) > iMaxY) { iMaxY = _Grid2Pix(w->iY+w->iH); iMaxYIdx=iIdx; bUpdate=true; }
+                        } _endwith;
+                    }
                     if (bUpdate) { ScrollUpdate(hwnd,-1,-1); }
-                } _endwith;
+                } //end scope
+                //puts("blocks arranged successfully");
+
                 // if mouse is outside of visible area then scroll it // TODO: make that work for connectors!
                 static char bSwap ; bSwap = (bSwap+1) & 3;
                 if (!bSwap) {
@@ -1685,8 +1826,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     if (iMouseX < 0)           { PostMessage( hwnd , WM_HSCROLL , SB_LINEUP   , 0 ); }
                     if (iMouseX >= tRc.right)  { PostMessage( hwnd , WM_HSCROLL , SB_LINEDOWN , 0 ); }
                 } //endif (bSwap)
+                SetUpdate();
             } //endif (bMoved)
 
+            if (bTempSel && pTempSelList) { SelFreeList( pTempSelList ); pTempSelList=0; }
             return 0;
         }
         case WM_PAINT: {           //Update window from bitmap if ready
@@ -1883,6 +2026,11 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                         MessageBeep(MB_ICONINFORMATION);
                         return 0;
                     }
+                    if (g_iExtSelCount > 1) {
+                        SelClear( true );
+                    } else {
+                        if (g_iExtSelCount) SelRemove( aObject(iSelectedIndex).uUniqueID , iSelectedIndex );
+                    }
                     InsertObject( iViewX+iMouseX , iViewY+iMouseY , iClassToAdd , true /* named */ );
                     break;
                 }
@@ -1893,11 +2041,14 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                             iSelIndexConn = -1; break;
                         }
                         if (g_iExtSelCount > 1) {
-                            for (int i=g_iObjCount-1 ; i >= 0 ; i--) {
-                                if (SelRemove(aObject(i).uUniqueID)) {
-                                    RemoveObject(i);
+                            _auto pTemp = SelCreateList(); int i = 0;
+                            for (i = 0 ; pTemp[i].uUniqueID ; i++) { }
+                            for ( --i ; i >= 0 ; i-- ) {
+                                if (SelRemove(pTemp[i].uUniqueID,pTemp[i].uIndex)) {
+                                    RemoveObject(pTemp[i].uIndex);
                                 }
                             }
+                            SelFreeList( pTemp );
                         } else {
                             RemoveObject( iSelectedIndex );
                         }
@@ -1908,7 +2059,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                     //enumerate all objects and connectors
                     for (int i=0 ; i<g_iObjCount ; i++) {
                         _with( aObject(i) ) {
-                            printf("Obj %i(ID=%i): %s (%i,%i) %ix%i\n",i,w->uUniqueID,w->zName,w->iX,w->iY,w->iW,w->iH);
+                            printf("Obj %i(ID=%i): %s (%i,%i) %ix%i %s\n",i,w->uUniqueID,w->zName,w->iX,w->iY,w->iW,w->iH,w->bSelected?"(Selected)":"");
                             if (w->tConnector.uConnector) { //have connectors
                                 ConnectorStruct *pCon = &w->tConnector ; int uCount = 1;
                                 if (!w->tConnector.uOneConnector) {
@@ -1933,7 +2084,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 case 'X'-'@' : SendMessage( hwnd , WM_CUT , 0,0 ) ; break;
                 case 'A'-'@' : { //select all
                     for (int i=g_iObjCount-1 ; i >= 0 ; i--) {
-                        SelAdd(aObject(i).uUniqueID);
+                        SelAdd(aObject(i).uUniqueID,i);
                     }
                     break;
                 }
@@ -1954,15 +2105,16 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 iSelIndexConn = -1; bConnectingPin = 0;
                 //printf("%i to %i\n",iStartIdx,iEndIdx);
                 const POINT pt = { (short)LOWORD(lParam) , (short)HIWORD(lParam) }; RECT tRc;
-                int iNewSel = ObjectFromPoint( pt , &tRc );
+                int iNewSel = iSelectedIndex = ObjectFromPoint( pt , &tRc );
                 if ((GetKeyState( VK_CONTROL )>>7)) {
-                    iSelectedIndex = iNewSel;
                     if (iNewSel >= 0) {
-                        SelToggle( aObject(iNewSel).uUniqueID );
+                        SelToggle( aObject(iNewSel).uUniqueID, iNewSel );
                         return 0;
                     }
                 } else {
-                    iSelectedIndex = SelReplaceWithIndex( iOldSel , iNewSel );
+                    if ( iNewSel<0 || (!SelCheck( aObject(iNewSel).uUniqueID , iNewSel ))) {
+                        iSelectedIndex = SelReplaceWithIndex( iOldSel , iNewSel );
+                    }
                 }
                 if ( iSelectedIndex >= 0 ) {
                     if (bLastSizeSide) {
@@ -2021,19 +2173,25 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             if (bDragging || bResizing || bConnectingPin ) { SetCapture( NULL ); }
             if (bDragging>1 || bResizing) { iMaxXIdx=-1 ; ScrollUpdate(hwnd,-1,-1); }
             if (bConnectingPin) { AddConnectingPin( iHoverIndex , bHoverPin ); }
+            if (bDragging>1) { SelFreeList(pTempSelList); pTempSelList = NULL; }
             bDragging = 0; bResizing = 0;
             SetUpdate(); return 0;
         }
         case WM_CONTEXTMENU: {
+            if (hwndEdit) { SetFocus(hwnd); }
             _const xPos = LOWORD(lParam);
             _const yPos = HIWORD(lParam);
             const POINT pt = { iMouseX , iMouseY }; RECT tRc;
             int iOldSel = iSelectedIndex, iNewSel = ObjectFromPoint( pt , &tRc );
             if (iNewSel < 0) { return 0; }
-            if (!SelCheck( aObject(iNewSel).uUniqueID )) {
+            if (!SelCheck( aObject(iNewSel).uUniqueID , iNewSel )) {
                 iSelectedIndex = SelReplaceWithIndex( iOldSel , iNewSel );
             }
+            //device to enable/disable based on iSelectedIndex class info flag
+            int iState = (g_ClassInterface[aObject(iSelectedIndex).iClassID].uFlags & cfCanEdit) ? MFS_ENABLED : MFS_DISABLED;
+            menu_MenuState( g_PopupMenu , pmeEditContent , iState );
             TrackPopupMenu( g_PopupMenu , TPM_LEFTALIGN , xPos , yPos , 0 , hwnd , NULL );
+
         }
         case WM_KILLFOCUS:         //Lost Focus
         case WM_SETFOCUS: {        //Got Focus
@@ -2051,11 +2209,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             GetClipboard( zBuff , &iLen );
             if ( (iLen != 11) || zBuff[10] != '}' || memcmp(zBuff,"{Orca|",6)) { puts("Not an object"); break; }
             sscanf( zBuff+6 , "%04X" , &iIndex);
-            iIndex = IndexFromUID( iIndex , -1 );
+            iIndex = IndexFromUID( iIndex /*iIndex=iUID*/ , -1 );
             if (iIndex < 0) {
                 MessageBox( hwnd, "Can't paste... Object no longer exists" , NULL , MB_ICONEXCLAMATION );
                 break;
             }
+            SelClear(true); //force clearing all selection
             CloneObject( iViewX+iMouseX , iViewY+iMouseY , &aObject(iIndex) );
             break;
         }
@@ -2063,9 +2222,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             int iID = LOWORD(wParam);         // control ID
             int iCode = HIWORD(wParam);      // notification code
             HWND hCtl = (HWND) lParam;      // handle of edit control
-            if (hwndEdit && hCtl==hwndEdit) {
+            //printf("ID=%i, code=%i\n",iID,iCode);
+            if ((iCode==0) && (hCtl==NULL)) { HandleMenuAction( iID ); return 0; } //from menu
+            if (hwndEdit && hCtl==hwndEdit) { //from edit overlay control
                 if (iCode == EN_KILLFOCUS) {
-                    //printf("ID=%i, code=%i\n",iID,iCode);
                     BeginEndEdit(iID,0,NULL);
                 }
             }
