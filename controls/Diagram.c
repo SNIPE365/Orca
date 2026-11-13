@@ -4,7 +4,6 @@
 #define _Grid2Pix(_sz) ((_sz)*_GridSize)
 #define _Pix2Grid(_sz) ((_sz)/_GridSize)
 
-//TODO: drag multiple selected objects
 //TODO: evaluate bug regarding connection to two different stdout's
 
 _const _MaxAllocationGap = 128;
@@ -77,6 +76,7 @@ typedef enum { //Diagram custom messages
     DIM_GENERATE,            //Generate code for all diagrams
     DIM_TESTFILE,            //Generate a test file module
     DIM_SETCLASS,            //Set the class to add when inserting a new object
+    DIM_SETROUNDSTYLE,       //Enable/Disable round style of components
     /* PRIVATE ONES */
     DIM_CREATE_BUFFER,
 } DiagramEnum;
@@ -174,6 +174,8 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     #define SetUpdateAsync() if (bDrawn) { bDrawn=0 ; SetTimer( hwnd , dmtRedraw , 7 , NULL ); }
     #define SetUpdate() if (bDrawn) { bDrawn=0 ; SendMessage( hwnd , WM_TIMER , 0 , 0 ); SetTimer( hwnd , dmtRedraw , 1000/120 , NULL ); }
 
+    static bool g_bRoundStyle = false;
+
     static int iFreeSlotCount=0, iObjTotal=0;       //free slots in the ptObjects[] array
     static int iMaxX=0, iMaxY=0;                    //maximum position of any existing object (pixels)
     static int iViewX=0, iViewY=0;                  //scrolling offset (pixels)
@@ -202,17 +204,26 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     static void* hwndOrgProc = NULL;
     static int iClassToAdd = -1;
     static int g_iExtSelCount = 0; static IndexHintStruct* pTempSelList;
-    static HMENU g_PopupMenu = 0;
+    static HMENU g_PopupMenu = 0, g_GridMenu = 0;
 
     static const int cBlkBrd = 4;
 
     #include "../components/_basedecl.h"
+    #define Dummy()
     #define ForEachPopupMenuEntry( __Entry , __SubMenu , __EndSubMenu , __Separator ) \
-        __Entry( pmeCopy        , "&Copy"   "\tCtrl+C"                    ,         ,  , NULL   ) \
-        __Entry( pmeRemove      , "&Delete" "\tDelete"                    ,         ,  , NULL   ) \
-        __Entry( pmeShow        , "&Locate In Blocks Palette" "\tInsert"  ,         ,  , NULL   ) \
-        __Entry( pmeEditLabel   , "Edit &Label"                           ,         ,  , NULL   ) \
-        __Entry( pmeEditContent , "&Edit &Content"                        ,         ,  , NULL   )
+        __Entry( pmeCopy        , "&Copy"   "\tCtrl+C"                    , , , NULL ) \
+        __Entry( pmeRemove      , "&Delete" "\tDelete"                    , , , NULL ) \
+        __Entry( pmeShow        , "&Locate In Blocks Palette" "\tInsert"  , , , NULL ) \
+        __Entry( pmeEditLabel   , "Edit &Label"                           , , , NULL ) \
+        __Entry( pmeEditContent , "&Edit &Content"                        , , , NULL )
+    #define ForEachGridMenuEntry( __Entry  , __SubMenu , __EndSubMenu , __Separator ) \
+            __Entry( gmeUndo      , "&Undo"             "\tCtrl+Z" ,  ,  , NULL ) \
+            __Entry( gmeRedo      , "&Redo"             "\tCtrl+Y" ,  ,  , NULL ) \
+            __Separator() \
+            __Entry( gmePaste     , "&Paste"            "\tCtrl+V" ,  ,  , NULL ) \
+            __Separator() \
+            __Entry( gmeSelectAll , "Select &All"       "\tCtrl+A" ,  ,  , NULL ) \
+            __Entry( gmeInvertSel , "&Invert Selection"            ,  ,  , NULL )
     //-------------------------------------------------------------------------------------------
     #define EnumEntry( _Name , _p... ) _Name,
     #define MayEnumEntry( _p... ) EnumEntry(_p)
@@ -222,16 +233,21 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         ForEachPopupMenuEntry( MayEnumEntry , MayEnumSubMenu , Dummy , Dummy )
         pmeLast
     } PopupMenuEntries;
+    typedef enum {
+        gmeFirst = 2000,
+        ForEachGridMenuEntry( MayEnumEntry , MayEnumSubMenu , Dummy , Dummy )
+        gmeLast
+    } GridMenuEntries;
     #undef EnumEntry
     #undef MayEnumEntry
     #undef MayEnumSubMenu
-    HMENU CreateComponentPopupMenu(void) {
+    void CreateDiagramMenus(void) {
         #define _SubMenu( _sText... ) \
         { \
           _auto hMenu = menu_AddSubMenu( hMenu , _sText , 0 ); \
 
         #define _EndSubMenu() }
-        #define _Separator() menu_MenuAddEntry( hMenu , 0 , NULL , NULL , 0 );
+        #define _Separator() menu_MenuAddEntry( hMenu , 0 , NULL , 0 , 0 , 0 , 0 );
         #define VK(_N) (VK##_N)
 
         #define _Entry( _idName , _Text , _Modifiers , _Accelerator , _Callback... ) \
@@ -240,8 +256,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 menu_MenuAddEntry( hMenu , _idName , _sText2 , _Modifiers+0 , _Accelerator+0 , _Callback+0 , 0 ); \
             }
 
-        _auto hMenu = CreatePopupMenu() ; g_PopupMenu = hMenu;
+        _auto hMenu = g_PopupMenu = CreatePopupMenu();
         ForEachPopupMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
+        hMenu = g_GridMenu = CreatePopupMenu();
+        ForEachGridMenuEntry( _Entry ,  _SubMenu , _EndSubMenu , _Separator )
 
         #undef _SubMenu
         #undef _EndSubMenu
@@ -249,7 +267,6 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         #undef _Entry
         #undef VK
 
-        return hMenu;
     } //menu_CreateMainMenu()
 
     //-------------------------------------------------------------------------------------------
@@ -393,7 +410,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         SetUpdateAsync();
     }
-    void SelClear( bool bForced /* = false */ ) {             //clear extended selection
+    void SelClear( bool bForced /* = false */ ) {  //clear extended selection
         _const ptOrder = g_ptOrder;
         if ( !g_iExtSelCount && iSelectedIndex<0 ) { return; }
         if (bForced && g_iExtSelCount == 1 && iSelectedIndex >= 0) {
@@ -409,6 +426,13 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         }
         //printf("Selection Cleared\n");
     }
+    void SelInvert() {                             //toggle extended selection
+        _const ptOrder = g_ptOrder;
+        for (int i=0 ; i<g_iObjCount ; i++) {
+            (aObject(i).bSelected ^= 1) ? g_iExtSelCount++ : g_iExtSelCount--;
+        }
+    }
+
     int SelReplaceWithIndex( int iOldIndex , int iNewIndex ) {   //replace standard and extended selection with single selection
         _const ptOrder = g_ptOrder;
         bool bForce = (g_iExtSelCount>0 && iOldIndex<0);
@@ -442,70 +466,72 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     }
 
     // ------------- Bezier Evalution functions ------------
-    POINT EvaluateCubicBezier(const POINT atBezier[4], float t) {
-        float u = 1.0f - t;
-        float tt = t * t;
-        float uu = u * u;
-        float uuu = uu * u;
-        float ttt = tt * t;
+    BOOL HitTestBezierMath(POINT clickPt, const POINT atBezier[4], int tolerancePx) {
+        if (g_bRoundStyle) { //Round Bezier
+            POINT EvaluateCubicBezier(const POINT atBezier[4], float t) {
+                float u = 1.0f - t;
+                float tt = t * t;
+                float uu = u * u;
+                float uuu = uu * u;
+                float ttt = tt * t;
 
-        POINT p;
-        p.x = (LONG)(uuu * atBezier[0].x + 3.0f * uu * t * atBezier[1].x + 3.0f * u * tt * atBezier[2].x + ttt * atBezier[3].x);
-        p.y = (LONG)(uuu * atBezier[0].y + 3.0f * uu * t * atBezier[1].y + 3.0f * u * tt * atBezier[2].y + ttt * atBezier[3].y);
-        return p;
-    }
-    float DistanceToLineSegment(POINT p, POINT a, POINT b) {
-        float dx = (float)(b.x - a.x);
-        float dy = (float)(b.y - a.y);
-        float l2 = dx * dx + dy * dy;
+                POINT p;
+                p.x = (LONG)(uuu * atBezier[0].x + 3.0f * uu * t * atBezier[1].x + 3.0f * u * tt * atBezier[2].x + ttt * atBezier[3].x);
+                p.y = (LONG)(uuu * atBezier[0].y + 3.0f * uu * t * atBezier[1].y + 3.0f * u * tt * atBezier[2].y + ttt * atBezier[3].y);
+                return p;
+            }
+            float DistanceToLineSegment(POINT p, POINT a, POINT b) {
+                float dx = (float)(b.x - a.x);
+                float dy = (float)(b.y - a.y);
+                float l2 = dx * dx + dy * dy;
 
-        if (l2 == 0.0f) {
-            return hypotf((float)(p.x - a.x), (float)(p.y - a.y));
-        }
+                if (l2 == 0.0f) {
+                    return hypotf((float)(p.x - a.x), (float)(p.y - a.y));
+                }
 
-        float t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
-        if (t < 0.0f) t = 0.0f;
-        if (t > 1.0f) t = 1.0f;
+                float t = ((p.x - a.x) * dx + (p.y - a.y) * dy) / l2;
+                if (t < 0.0f) t = 0.0f;
+                if (t > 1.0f) t = 1.0f;
 
-        float projX = a.x + t * dx;
-        float projY = a.y + t * dy;
+                float projX = a.x + t * dx;
+                float projY = a.y + t * dy;
 
-        return hypotf((float)p.x - projX, (float)p.y - projY);
-    }
-    BOOL HitTestBezierMath(POINT clickPt, const POINT atBezier[4], float tolerancePx) {
-        const int STEPS = 16;
-        POINT prev = atBezier[0];
-        for (int i = 1; i <= STEPS; i++) {
-            float t = (float)i / (float)STEPS;
-            POINT current = EvaluateCubicBezier(atBezier, t);
-            if (DistanceToLineSegment(clickPt, prev, current) <= tolerancePx) { return TRUE; }
-            prev = current;
-        }
+                return hypotf((float)p.x - projX, (float)p.y - projY);
+            }
+            const int STEPS = 16;
+            POINT prev = atBezier[0];
+            for (int i = 1; i <= STEPS; i++) {
+                float t = (float)i / (float)STEPS;
+                POINT current = EvaluateCubicBezier(atBezier, t);
+                if (DistanceToLineSegment(clickPt, prev, current) <= tolerancePx) { return TRUE; }
+                prev = current;
+            }
+        } else { //Square Bezier
+            int iMidY = (atBezier[0].y+atBezier[1].y)/2, iSz;
+            #define _ChkVert( _x , _y0 , _y1 ) ((abs(clickPt.x-(_x))<=tolerancePx) && (abs(clickPt.y-((_y1)+(_y0))/2)<=(abs((_y1)-(_y0)))/2))
+            #define _ChkHorz( _x0 , _x1 , _y ) ((abs(clickPt.y-(_y))<=tolerancePx) && (abs(clickPt.x-((_x1)+(_x0))/2)<=(abs((_x1)-(_x0)))/2))
+            if _ChkVert( atBezier[0].x , atBezier[0].y , iMidY ) { return true; }
+            if _ChkHorz( atBezier[0].x , atBezier[3].x , iMidY ) { return true; }
+            if _ChkVert( atBezier[3].x , atBezier[3].y , iMidY ) { return true; }
+            #undef _ChkVert
+            #undef _ChkHorz
+        };
         return FALSE;
     }
     void DrawBezier( HDC hdc , const POINT *pPoints , int iNumPoints ) {
-
-        /*
-        MoveToEx( hdc , pPoints[0].x , pPoints[0].y , NULL );
-        int iMidY = (pPoints[0].y+pPoints[1].y)/2;
-        LineTo( hdc , pPoints[1].x , iMidY );
-        LineTo( hdc , pPoints[3].x , iMidY );
-        LineTo( hdc , pPoints[3].x , pPoints[3].y );
-        */
-
-        PolyBezier(hdc , pPoints , iNumPoints );
-
-        /*int iMidY = (pPoints[0].y+pPoints[1].y)/2;
-        const POINT aPt[4] = {
-            {pPoints[0].x , pPoints[0].x} ,
-            {pPoints[1].x , iMidY} ,
-            {pPoints[3].x , iMidY} ,
-            { pPoints[3].x , pPoints[3].y }
+        if (g_bRoundStyle) { //Round Beizer
+            PolyBezier(hdc , pPoints , iNumPoints );
+        } else { //Square Bezier
+            int iMidY = (pPoints[0].y+pPoints[1].y)/2;
+            const POINT aPt[4] = {
+                {pPoints[0].x , pPoints[0].y} ,
+                {pPoints[0].x , iMidY} ,
+                {pPoints[3].x , iMidY} ,
+                {pPoints[3].x , pPoints[3].y }
+            };
+            const BYTE bType[4] = { PT_MOVETO , PT_LINETO , PT_LINETO , PT_LINETO };
+            PolyDraw( hdc , aPt , bType , 4 );
         };
-        const BYTE bType[4] = { PT_MOVETO , PT_LINETO , PT_LINETO , PT_LINETO };
-        PolyDraw( hdc , aPt , bType , 4 );
-        PolyBezier( hdc , pPoints , iNumPoints ); */
-
     }
 
     ConnectorStruct* ConnectorFromIndex( int iObjIdx , int iConIdx , int* piCount /* =0 */ ) {
@@ -956,13 +982,21 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 //render object
                 SelectObject( hdc , hbObject[ w->iClassID ] );
                 RECT tObjRc = {iPosX,iPosY,iPosX+_Grid2Pix(w->iW),iPosY+_Grid2Pix(w->iH)};
-                RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
+                if (g_bRoundStyle) {
+                    RoundRect( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom , 16 , 16 );
+                } else {
+                    Rectangle( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom);
+                }
 
                 //border if selected (single select)
                 if ( iSelIndexConn<0 && SelCheck( w->uUniqueID , iIndex ) ) {
                     _const hOldPen = SelectObject( hdc , g_iExtSelCount > 1 ? hpMultiSelected : hpSelected );
                     _const hOldBrush = SelectObject( hdc , GetStockObject( NULL_BRUSH ) );
-                    RoundRect( hdc , tObjRc.left-0 , tObjRc.top-0 , tObjRc.right+0 , tObjRc.bottom+0 , 16 , 16 );
+                    if (g_bRoundStyle) {
+                        RoundRect( hdc , tObjRc.left-0 , tObjRc.top-0 , tObjRc.right+0 , tObjRc.bottom+0 , 16 , 16 );
+                    } else {
+                        Rectangle( hdc , tObjRc.left , tObjRc.top , tObjRc.right , tObjRc.bottom);
+                    }
                     SelectObject( hdc , hOldPen ); SelectObject( hdc , hOldBrush );
                 }
 
@@ -1566,9 +1600,9 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
     void HandleMenuAction( int iID ) {
         _const ptOrder = g_ptOrder;
         switch (iID) {
-            //case pmeCut:       { SendMessage( hwnd , WM_CUT , 0 , 0 ); break; }
+            //case pmeCut:         { SendMessage( hwnd , WM_CUT , 0 , 0 ); break; }
             case pmeCopy:        { SendMessage( hwnd , WM_COPY , 0 , 0 ); break; }
-                //case pmePaste:       { SendMessage( hwnd , WM_PASTE , 0 , 0 ); break; }
+            //case pmePaste:       { SendMessage( hwnd , WM_PASTE , 0 , 0 ); break; }
             case pmeRemove:      { SendMessage( hwnd , WM_KEYDOWN , VK_DELETE , 0 ); break; }
             case pmeShow:        { SendMessage( hwnd , WM_KEYDOWN , VK_INSERT , 0 ); break; }
             case pmeEditLabel:
@@ -1582,7 +1616,12 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
                 } _endwith
                 break;
             }
-            default:             { printf("%s%i","Unhandled Menu Action: ",iID); break; }
+            //case gmeUndo:        { UndoStep( 0 ); break; }
+            //case gmeRedo:        { UndoStep( 1 ); break; }
+            case gmePaste:       { SendMessage( hwnd , WM_PASTE , 0 , 0 ); break; }
+            case gmeSelectAll:   { SendMessage( hwnd , WM_CHAR , 'A'-'@' , 0 ); break; }
+            case gmeInvertSel:   { SelInvert(); SetUpdateAsync(); break; }
+            default:             { printf("%s%i\n","Unhandled Menu Action: ",iID); break; }
         }
     }
     // ------------- Message dispatch --------------
@@ -1945,6 +1984,10 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             return (LRESULT) ((wParam) ? CreateRandomTestDiagram( (char*)lParam ) : CreateTestDiagram( (char*)lParam ));
             break;
         }
+        case DIM_SETROUNDSTYLE: {  //wParam = (1|0) // Round Style }
+            g_bRoundStyle = !!wParam;
+            SetUpdateAsync(); break;
+        }
         case WM_MOUSEWHEEL: {      //Mouse wheel event
             int zDelta = (short) HIWORD(wParam);    // wheel rotation
             //fwKeys = LOWORD(wParam);    // key flags
@@ -1967,7 +2010,7 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
         case WM_CREATE: {          //Initialize control
 
             initComponents(); //basedecl.h
-            g_PopupMenu = CreateComponentPopupMenu();
+            CreateDiagramMenus();
 
             hSmallFont = GetStockObject( SYSTEM_FONT );
             hbBack = CreateSolidBrush( cBack );
@@ -2183,15 +2226,35 @@ static CALLBACK LRESULT Diagram_WndProc ( HWND hwnd , UINT message, WPARAM wPara
             _const yPos = HIWORD(lParam);
             const POINT pt = { iMouseX , iMouseY }; RECT tRc;
             int iOldSel = iSelectedIndex, iNewSel = ObjectFromPoint( pt , &tRc );
-            if (iNewSel < 0) { return 0; }
-            if (!SelCheck( aObject(iNewSel).uUniqueID , iNewSel )) {
-                iSelectedIndex = SelReplaceWithIndex( iOldSel , iNewSel );
+            HMENU hMenu;
+            if (iNewSel < 0) { //nothing under the cursor: show the grid menu
+                //Paste is only available when the clipboard holds a copied object that still exists
+                bool bCanPaste = 0;
+                { char zBuff[16]; int iLen = 16, iUID = 0; //TODO: this is a weak check
+                    if ( GetClipboard( zBuff , &iLen ) && iLen == 11 && zBuff[10] == '}' && !memcmp( zBuff , "{Orca|" , 6 ) ) {
+                        sscanf( zBuff+6 , "%04X" , &iUID );
+                        bCanPaste = ( IndexFromUID( iUID , -1 ) >= 0 );
+                    }
+                }
+                #define MenuState( _ID , _Cond ) menu_MenuState( g_GridMenu , _ID , (_Cond) ? MFS_ENABLED : MFS_DISABLED );
+                MenuState( gmeUndo      , 0 ); //iUndoCnt    );
+                MenuState( gmeRedo      , 0 ); //iRedoCnt    );
+                MenuState( gmePaste     , bCanPaste   );
+                MenuState( gmeSelectAll , g_iObjCount );
+                MenuState( gmeInvertSel , g_iObjCount );
+                #undef MenuState
+                hMenu = g_GridMenu;
+            } else {
+                if (!SelCheck( aObject(iNewSel).uUniqueID , iNewSel )) {
+                    iSelectedIndex = SelReplaceWithIndex( iOldSel , iNewSel );
+                }
+                //device to enable/disable based on iSelectedIndex class info flag
+                int iState = (g_ClassInterface[aObject(iSelectedIndex).iClassID].uFlags & cfCanEdit) ? MFS_ENABLED : MFS_DISABLED;
+                menu_MenuState( g_PopupMenu , pmeEditContent , iState );
+                hMenu = g_PopupMenu;
             }
-            //device to enable/disable based on iSelectedIndex class info flag
-            int iState = (g_ClassInterface[aObject(iSelectedIndex).iClassID].uFlags & cfCanEdit) ? MFS_ENABLED : MFS_DISABLED;
-            menu_MenuState( g_PopupMenu , pmeEditContent , iState );
-            TrackPopupMenu( g_PopupMenu , TPM_LEFTALIGN , xPos , yPos , 0 , hwnd , NULL );
-
+            TrackPopupMenu( hMenu , TPM_LEFTALIGN , xPos , yPos , 0 , hwnd , NULL );
+            return 0;
         }
         case WM_KILLFOCUS:         //Lost Focus
         case WM_SETFOCUS: {        //Got Focus

@@ -21,6 +21,9 @@
      __Separator() */\
      __Entry( meFile_Exit     , "&Quit" "\tAlt+F4"  , _Ctrl        , VK(_Q) , &File_Exit   ) \
    __EndSubMenu() \
+   __SubMenu( "&View" ) \
+     __Entry( meView_RoundStyle,"&Show Round Blocks",              ,        , View_ToggleRoundStyle ) \
+   __EndSubMenu() \
    __SubMenu( "&Project" ) \
       __Entry( meProject_build     , "&Build"       , _Ctrl        , VK(_B)  , Project_Build   ) \
       __Entry( meProject_Qbuild    , "&Quick Build" ,              , VK(_F6) , Project_Build   ) \
